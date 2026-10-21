@@ -1,0 +1,55 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="PackedScene" path="res://scenes/sleigh.tscn" id="2_sleigh"]
+[ext_resource type="PackedScene" path="res://scenes/house.tscn" id="3_house"]
+[ext_resource type="Script" path="res://scripts/chase_camera.gd" id="4_cam"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="5_hud"]
+[ext_resource type="Script" path="res://scripts/reindeer_team.gd" id="6_team"]
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="Sleigh" parent="." instance=ExtResource("2_sleigh")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.25, 0)
+
+[node name="ReindeerTeam" type="Node3D" parent="."]
+script = ExtResource("6_team")
+
+[node name="HouseFlat" parent="." instance=ExtResource("3_house")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -12, 0, -40)
+roof_type = 0
+door_side = 1
+wall_height = 4.0
+wall_color = Color(0.98, 0.5, 0.15, 1)
+trim_color = Color(0.5, 0.25, 0.75, 1)
+roof_color = Color(0.32, 0.24, 0.45, 1)
+
+[node name="HouseSteep" parent="." instance=ExtResource("3_house")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 15, 0, -75)
+roof_type = 1
+door_side = 2
+width = 11.0
+wall_height = 4.5
+wall_color = Color(0.58, 0.32, 0.82, 1)
+trim_color = Color(1, 0.78, 0.15, 1)
+roof_color = Color(0.7, 0.12, 0.1, 1)
+fireplace_lit = true
+
+[node name="HouseSlick" parent="." instance=ExtResource("3_house")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -16, 0, -110)
+roof_type = 2
+door_side = 1
+door_offset = -3.4
+wall_height = 5.5
+wall_color = Color(1, 0.78, 0.2, 1)
+trim_color = Color(0.1, 0.55, 0.6, 1)
+roof_color = Color(0.12, 0.17, 0.38, 1)
+fireplace_lit = true
+
+[node name="ChaseCamera" type="Camera3D" parent="."]
+far = 1500.0
+script = ExtResource("4_cam")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+script = ExtResource("5_hud")

@@ -1,0 +1,46 @@
+# Godot 4
+.godot/
+*.tmp
+*.translation
+export/
+exports/
+build/
+builds/
+*.pck
+*.exe
+*.apk
+*.aab
+export_presets.cfg
+export_credentials.cfg
+
+# Local tooling: keep the helper scripts, ignore everything else
+.tools/*
+!.tools/*.ps1
+.tools/godot/
+.tools/backups/
+.tools/backup_*/
+.tools/fpsdiag.flag
+
+# Screenshot and video dumps from test runs (~300 MB, regenerate with the scripts)
+screenshots/
+/*.jpg
+/*.jpg.import
+/*.png
+/*.png.import
+
+# Third-party reference images (copyrighted, not ours to release as CC0)
+art/reference/hello_neighbor_keyart.png
+art/reference/hello_neighbor_keyart.png.import
+art/reference/elf_stealth_reference.png
+art/reference/elf_stealth_reference.png.import
+
+# Python / OS / editor junk
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+*.blend1
+.env
+.env.*
