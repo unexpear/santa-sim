@@ -98,6 +98,9 @@ func _ready() -> void:
 		elif a.begins_with("--nightshots="):
 			_checks = Checks.new()
 			_checks.call("night_shots", self, a.get_slice("=", 1))
+		elif a.begins_with("--chimvisualcheck="):
+			_checks = Checks.new()
+			_checks.call("chim_visual", self, a.get_slice("=", 1))
 		elif a.begins_with("--mechcheck="):
 			_checks = load("res://scripts/mech/mech_checks.gd").new()
 			_checks.call("mech_check", self, a.get_slice("=", 1))

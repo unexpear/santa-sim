@@ -19,6 +19,7 @@ const Furn := preload("res://scripts/furniture.gd")
 const Decor := preload("res://scripts/decor.gd")
 const ChimneyModel := preload("res://scripts/chimney_model.gd")
 const Carve := preload("res://scripts/carve.gd")
+const CarveVisual := preload("res://scripts/carve_visual.gd")
 ## --break-chimney (checks only): put the chimney back how it was broken (world layer only, no
 ## flue / fireplace-shaft collision) to prove --solidcheck catches it.
 static var break_chimney := OS.get_cmdline_user_args().has("--break-chimney")
@@ -136,6 +137,7 @@ func _ready() -> void:
 			_build_slick()
 	_build_flue_shaft()
 	_elf_chimney_collision()
+	_carve_camera_channel.call_deferred()  # after decorations / light strings are added
 	if interior:
 		_build_fire()
 		set_fire(fireplace_lit)
@@ -755,6 +757,44 @@ func _ledge_down(st: SurfaceTool, lo: Rect2, hi: Rect2, y: float) -> void:
 
 
 ## Hide / show the floor and ceiling slabs the liner passes through (cutscene camera in the flue).
+## Cut a clear channel for the descent camera through every visual mesh of this house along the
+## flue path (crown opening, liner, offset, smoke chamber, down to the throat): half-width =
+## camera near plane + CarveVisual.CHANNEL_MARGIN, which stays inside the open flue so the brick
+## walls are untouched. Collision is not touched (the elf's tube stays solid). The damper flap,
+## the fire and the elf are excluded (they are meant to be seen in the path).
+func _carve_camera_channel() -> void:
+	if flue_info.is_empty():
+		return
+	var near := 0.015
+	var r := near + CarveVisual.CHANNEL_MARGIN
+	var boxes := []
+	var lt: Vector3 = flue_info.liner_top
+	var lc: Vector3 = flue_info.liner_bottom
+	var ct: Vector3 = flue_info.chamber_top
+	var th: Vector3 = flue_info.throat
+	var crown := to_local(get_chimney_mouth_world()).y + 0.6
+	var kink_y: float = flue_info.kink_y
+	var liner_y: float = flue_info.liner_y
+	boxes.append(AABB(Vector3(lc.x - r, kink_y - 0.02, lc.z - r), Vector3(r * 2.0, crown - kink_y + 0.02, r * 2.0)))
+	var n := maxi(2, int(ceil((kink_y - liner_y) / 0.03)))
+	for k in n + 1:
+		var f := float(k) / n
+		var c := Vector3(ct.x, liner_y, ct.z).lerp(Vector3(lc.x, kink_y, lc.z), f)
+		boxes.append(AABB(c - Vector3(r, 0.03, r), Vector3(r * 2.0, 0.06, r * 2.0)))
+	var m := maxi(2, int(ceil((liner_y - th.y) / 0.03)))
+	for k in m + 1:
+		var f := float(k) / m
+		var c := Vector3(th.x, th.y, th.z).lerp(Vector3(ct.x, liner_y, ct.z), f)
+		boxes.append(AABB(c - Vector3(r, 0.03, r), Vector3(r * 2.0, 0.06, r * 2.0)))
+	var excl: Array = [damper_hinge]
+	for c in get_children():
+		if str(c.name).to_lower().contains("fire") or c is GPUParticles3D:
+			excl.append(c)
+	var t0 := Time.get_ticks_usec()
+	var nmesh := CarveVisual.carve_channel(self, boxes, excl)
+	print("[carve] %s: camera channel r %.3f m through %d visual mesh(es) (%d boxes, %.1f ms)" % [name, r, nmesh, boxes.size(), (Time.get_ticks_usec() - t0) / 1000.0])
+
+
 func set_flue_view(on: bool) -> void:
 	_flue_view = on
 	for mi in flue_blockers:

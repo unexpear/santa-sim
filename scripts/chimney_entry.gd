@@ -646,6 +646,7 @@ func _make_hook(at: Vector3, into := Vector3.FORWARD) -> void:
 	_line.mesh = cm
 	_line.material_override = GB.mat(Color(0.2, 0.22, 0.16), 0.0, 0.1)  # olive-drab kernmantle (no glow)
 	_line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_line.add_to_group("flue_path_ok")  # the elf's own cord: meant to be seen hanging down the flue
 	(main as Node3D).add_child(_line)
 	for n in _hook.find_children("*", "VisualInstance3D", true, false):
 		(n as VisualInstance3D).layers = 3

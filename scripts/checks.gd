@@ -3021,7 +3021,7 @@ func chim_top(m: Node3D, d: String) -> void:
 		if a.begins_with("--tag="):
 			tag = a.get_slice("=", 1)
 	await _wait(2.5)
-	for hn in ["HouseFlat", "HouseSteep"]:
+	for hn in ["HouseFlat", "HouseSteep", "HouseSlick"]:
 		var h: Node3D = m.get_node(hn)
 		if not await land(h):
 			continue
@@ -3064,6 +3064,99 @@ func chim_top(m: Node3D, d: String) -> void:
 		await exit_house()
 	print("[check] chimtop done")
 	m.get_tree().quit()
+
+
+## --chimvisualcheck=<dir> (headless OK): nothing may cut across the inside of the flue in front of
+## the descent camera. Every frame while the cutscene camera is inside a flue, every visible mesh
+## (except the elf, its rope, particles) is tested against the camera channel (near plane + 5 cm
+## round the flue centre line, from 1 m below the eaves to just under the mouth): any triangle sample
+## inside it is a flat slab in the camera path (the "orange / purple bar") and FAILS the check.
+func chim_visual(m: Node3D, d: String) -> void:
+	_init_check(m, d)
+	await _wait(2.0)
+	var bad := {}
+	var frames_inside := 0
+	for hn in ["HouseFlat", "HouseSteep", "HouseSlick"]:
+		var h: Node3D = m.get_node(hn)
+		if not await land(h):
+			fail("%s: could not land" % hn)
+			continue
+		mission.call("enter", h)
+		await wait_phase("abseil")
+		var cb: Vector3 = h.get("chimney_base")
+		var fs := 0.015 + 0.05  # the carved camera channel: near plane + margin (house.gd _carve_camera_channel)
+		var top := h.to_local(h.call("get_chimney_mouth_world")).y - 0.05
+		var col := AABB(Vector3(cb.x - fs, float(h.get("wall_height")) - 1.0, cb.z - fs), Vector3(fs * 2.0, 0, fs * 2.0))
+		col.size.y = top - col.position.y
+		var t0 := Time.get_ticks_msec()
+		var n_in := 0
+		while Time.get_ticks_msec() - t0 < 14000 and str(mission.get("cut_phase")) in ["abseil", "chamber"]:
+			await main.get_tree().process_frame
+			var cam := main.get_viewport().get_camera_3d()
+			var lp := h.to_local(cam.global_position)
+			if not col.grow(0.03).has_point(lp):
+				continue
+			n_in += 1
+			if n_in % 3 != 0:
+				continue
+			for g: GeometryInstance3D in _flue_intruders(h, col.grow(-0.004)):  # cut faces sit ON the channel wall
+				var key := "%s: %s" % [hn, g.get_path()]
+				if not bad.has(key):
+					var mi := g as MeshInstance3D
+					bad[key] = "cam y %.2f, %s %s, aabb %s" % [lp.y, g.get_class(), (mi.mesh.get_class() + " " + str(mi.mesh.get_aabb().size)) if mi and mi.mesh else "", h.global_transform.affine_inverse() * g.global_transform * g.get_aabb()]
+		frames_inside += n_in
+		print("[chimvis] %s: %d camera frames inside the flue column checked" % [hn, n_in])
+		if n_in == 0:
+			fail("%s: the descent camera never entered the flue column (check can't see anything)" % hn)
+		await wait_mode(2, 60.0)
+		await exit_house()
+	for k in bad:
+		print("[chimvis]   INTRUDER %s (%s)" % [k, bad[k]])
+	if not bad.is_empty():
+		fail("%d mesh(es) cut across the flue interior in front of the descent camera" % bad.size())
+	print("[check] chimvisualcheck %s" % ("PASS" if ok else "FAIL"))
+	m.get_tree().quit()
+
+
+func _flue_intruders(h: Node3D, col: AABB) -> Array:
+	var out := []
+	var inv := h.global_transform.affine_inverse()
+	for n in main.find_children("*", "GeometryInstance3D", true, false):
+		var g := n as GeometryInstance3D
+		if not g.is_visible_in_tree() or g is GPUParticles3D or g is CPUParticles3D or g is Label3D:
+			continue
+		if mission.is_ancestor_of(g) or (elf and elf.is_ancestor_of(g)) or g.is_in_group("flue_path_ok"):
+			continue
+		var xf := inv * g.global_transform
+		var bb := xf * g.get_aabb()
+		if not bb.intersects(col):
+			continue
+		var mi := g as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			out.append(g)  # multimesh / other: a bounding box across the open flue is enough to flag
+			continue
+		var f := mi.mesh.get_faces()
+		var hit := false
+		for i in range(0, f.size(), 3):
+			var a := xf * f[i]
+			var b := xf * f[i + 1]
+			var c := xf * f[i + 2]
+			var tb := AABB(a, Vector3.ZERO).expand(b).expand(c)
+			if not tb.intersects(col):
+				continue
+			for u in 7:
+				for v in 7 - u:
+					var p := a + (b - a) * (u / 6.0) + (c - a) * (v / 6.0)
+					if col.has_point(p):
+						hit = true
+						break
+				if hit:
+					break
+			if hit:
+				break
+		if hit:
+			out.append(g)
+	return out
 
 
 ## --nightshots=<dir>: the night clock at sunset, midnight and sunrise from the start pad, with fps
