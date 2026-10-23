@@ -30,6 +30,12 @@ const SLACK := 3.0  ## the night is 3x the bare delivery time (exploring, hiding
 @export var scrub_rate := 900.0  ## debug: holding F8 (Shift+F8 back) runs the clock this many x faster
 @export var running := true
 
+## How dark solar midnight gets relative to the early-night art palette (tunable)
+const DEEP_SKY := 0.38
+const DEEP_HOR := 0.45
+const DEEP_AMBIENT := 0.75
+const DEEP_EXPOSURE := 0.9
+var deep := 0.0  ## 0 early night .. 1 solar midnight
 var night_seconds := 0.0  ## real seconds from start to sunrise
 var elapsed := 0.0
 var k := 0.0  ## 0 start (just before sunset) .. 1 sunrise
@@ -84,6 +90,7 @@ func bind(p_env: Environment, p_sky: ShaderMaterial, p_moon: DirectionalLight3D,
 	rim = p_rim
 	_base = {
 		"top": _sky_param("top_color"), "mid": _sky_param("mid_color"), "hor": _sky_param("horizon_color"),
+		"cloud": _sky_param("cloud_color"), "cloud_lit": _sky_param("cloud_lit_color"),
 		"amb": env.ambient_light_color, "amb_e": env.ambient_light_energy, "fog": env.volumetric_fog_albedo,
 		"moon_e": moon.light_energy if moon else 0.0, "fill_e": fill.light_energy if fill else 0.0, "rim_e": rim.light_energy if rim else 0.0,
 		"exp": env.tonemap_exposure,
@@ -210,7 +217,11 @@ func _apply() -> void:
 	var night := clampf(-sun_alt_deg / 14.0, 0.0, 1.0)
 	night = night * night * (3.0 - 2.0 * night)
 	lights_on = clampf((-sun_alt_deg - 1.0) / 4.0, 0.0, 1.0)  # on through civil dusk (sun -1..-5 deg)
-	interior_dim = lerpf(1.0, 0.55, clampf((-sun_alt_deg - 8.0) / 12.0, 0.0, 1.0))  # house lamps dim once everyone's in bed
+	interior_dim = lerpf(1.0, 0.8, clampf((-sun_alt_deg - 8.0) / 12.0, 0.0, 1.0))  # house lamps dim once everyone's in bed
+	# "deep" night: the art-directed palette is the early-night look; around solar midnight it
+	# goes properly dark (deeper sky, more stars, unlit clouds, lower ambient and exposure)
+	deep = clampf((-sun_alt_deg - 12.0) / 20.0, 0.0, 1.0)
+	deep = deep * deep * (3.0 - 2.0 * deep)
 	if env == null:
 		return
 	# sky: sunset (warm, light) -> dusk -> the art-directed night -> pre-dawn (pink) -> sunrise
@@ -224,32 +235,36 @@ func _apply() -> void:
 		var nh: Vector3 = _base.hor
 		var e1 := clampf(night * 2.0, 0.0, 1.0)  # day -> dusk
 		var e2 := clampf(night * 2.0 - 1.0, 0.0, 1.0)  # dusk -> night
-		var hor := day_hor.lerp(dusk_hor, e1).lerp(nh, e2)
-		sky_mat.set_shader_parameter("top_color", day_top.lerp(nb.lerp(day_top, 0.25), e1).lerp(nb, e2))
-		sky_mat.set_shader_parameter("mid_color", day_mid.lerp(nm, night))
+		var hor := day_hor.lerp(dusk_hor, e1).lerp(nh, e2) * lerpf(1.0, DEEP_HOR, deep)
+		sky_mat.set_shader_parameter("top_color", day_top.lerp(nb.lerp(day_top, 0.25), e1).lerp(nb, e2) * lerpf(1.0, DEEP_SKY, deep))
+		sky_mat.set_shader_parameter("mid_color", day_mid.lerp(nm, night) * lerpf(1.0, DEEP_SKY, deep))
 		sky_mat.set_shader_parameter("horizon_color", hor)
-		sky_mat.set_shader_parameter("star_amount", 0.35 * clampf((night - 0.45) / 0.55, 0.0, 1.0))
+		sky_mat.set_shader_parameter("cloud_color", (_base.cloud as Vector3) * lerpf(1.0, DEEP_SKY, deep))
+		sky_mat.set_shader_parameter("cloud_lit_color", (_base.cloud_lit as Vector3).lerp(_base.cloud as Vector3, deep) * lerpf(1.0, DEEP_SKY + 0.15, deep))
+		sky_mat.set_shader_parameter("star_amount", (0.35 + 0.45 * deep) * clampf((night - 0.45) / 0.55, 0.0, 1.0))
 		sky_mat.set_shader_parameter("moon_dir", _moon_dir())
 		sky_mat.set_shader_parameter("sun_dir", _sun_dir())
 		sky_mat.set_shader_parameter("sun_amount", clampf((sun_alt_deg + 4.0) / 4.0, 0.0, 1.0))
 		sky_mat.set_shader_parameter("sun_color", Vector3(1.0, 0.55, 0.22) if not dawn else Vector3(1.0, 0.68, 0.38))
-	var day_amb := Color(0.85, 0.7, 0.62) if not dawn else Color(0.8, 0.72, 0.75)
-	env.ambient_light_color = day_amb.lerp(_base.amb, night)
-	env.ambient_light_energy = lerpf(0.9, _base.amb_e, night)
-	env.volumetric_fog_albedo = Color(0.9, 0.62, 0.5).lerp(_base.fog, night) if not dawn else Color(0.85, 0.7, 0.72).lerp(_base.fog, night)
-	env.tonemap_exposure = lerpf(1.0, _base.exp, night)
+	# The models' lighting stays the art-directed look (ambient, fog, exposure, fill/rim: the values
+	# main.gd set up). Sunset/sunrise only colour the SKY; around solar midnight things go a bit darker.
+	# (An earlier version brightened ambient + fog toward a "day" palette: it washed every model out.)
+	env.ambient_light_color = _base.amb
+	env.ambient_light_energy = float(_base.amb_e) * lerpf(1.0, DEEP_AMBIENT, deep)
+	env.volumetric_fog_albedo = (_base.fog as Color).darkened(0.35 * deep)
+	env.tonemap_exposure = float(_base.exp) * lerpf(1.0, DEEP_EXPOSURE, deep)
 	if sun:
 		var sd := _sun_dir()
 		sun.visible = sun_alt_deg > -3.0
-		sun.light_energy = clampf((sun_alt_deg + 3.0) / 8.0, 0.0, 1.0) * 1.6
+		sun.light_energy = clampf((sun_alt_deg + 3.0) / 8.0, 0.0, 1.0) * 0.3  # a low warm glint, not a fill
 		if sun.visible:
 			sun.look_at_from_position(Vector3.ZERO, -sd, Vector3.UP if absf(sd.y) < 0.99 else Vector3.FORWARD)
 	if moon:
-		moon.light_energy = float(_base.moon_e) * lerpf(0.35, 1.0, night)
+		moon.light_energy = float(_base.moon_e) * lerpf(0.6, 1.0, night)
 	if fill:
-		fill.light_energy = float(_base.fill_e) * lerpf(1.6, 1.0, night)
+		fill.light_energy = float(_base.fill_e) * lerpf(1.0, 0.7, deep)
 	if rim:
-		rim.light_energy = float(_base.rim_e) * lerpf(1.8, 1.0, night)
+		rim.light_energy = float(_base.rim_e)
 	# dusk switches: streetlights, windows, Christmas lights; interior lamps dim later in the night
 	if absf(lights_on - _last_lights) > 0.01:
 		_last_lights = lights_on
