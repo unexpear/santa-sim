@@ -110,7 +110,11 @@ void fragment() {
 		}
 	}
 	vec3 col = albedo.rgb;
-	if (pattern > 0) {
+	if (pattern == 9) {
+		// twisted strands along a rope / cord: UV.x around, UV.y along (in strand pitches)
+		float st = fract(UV.x * 3.0 + UV.y);
+		col = mix(col, pattern_color.rgb, smoothstep(0.38, 0.5, st) * (1.0 - smoothstep(0.86, 0.98, st)));
+	} else if (pattern > 0) {
 		vec3 wn = normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
 		col = mix(col, pattern_color.rgb, pattern_mask(wn));
 	}

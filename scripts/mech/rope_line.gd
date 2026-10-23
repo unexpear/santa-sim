@@ -103,26 +103,79 @@ func _physics_process(dt: float) -> void:
 	_draw()
 
 
+## Drawn as one twisted three-strand cord (a tube with a strand pattern, real radius), sagging in
+## a parabola on every run when the rope is slack (sag^2 ~ 3/8 * run * slack, the shallow-catenary
+## approximation), straight when it is under tension.
+var _mi: MeshInstance3D
+var _im: ImmediateMesh
+var _mat: Material
+const SIDES := 7
+const SAMPLES := 10
+
+
 func _draw() -> void:
+	if _mi == null:
+		_im = ImmediateMesh.new()
+		_mi = MeshInstance3D.new()
+		_mi.mesh = _im
+		_mi.top_level = true
+		_mi.extra_cull_margin = 4.0
+		add_child(_mi)
+		var m := GB.mat(color, 0.0, 0.15).duplicate() as ShaderMaterial
+		m.set_shader_parameter("pattern", 9)
+		m.set_shader_parameter("pattern_color", color.darkened(0.35))
+		_mat = m
+	_mi.global_transform = Transform3D.IDENTITY
+	_im.clear_surfaces()
 	var n := points.size() - 1
-	while _segs.size() < n:
-		var mi := GB.cylinder(self, radius, radius, 1.0, Vector3.ZERO, color)
-		mi.top_level = true
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_segs.append(mi)
-	for i in _segs.size():
-		var mi: MeshInstance3D = _segs[i]
-		mi.visible = i < n and not broken
-		if not mi.visible:
-			continue
+	if n < 1 or broken:
+		return
+	var pts: Array[Vector3] = []
+	var L := 0.0
+	for i in n:
+		L += world(i).distance_to(world(i + 1))
+	var slack := maxf(effective_rest() - L, 0.0) if tension <= 0.0 else 0.0
+	for i in n:
 		var a := world(i)
 		var b := world(i + 1)
-		var d := b - a
-		var ln := d.length()
-		if ln < 1e-4:
-			mi.visible = false
-			continue
-		var y := d / ln
-		var x := y.cross(Vector3.FORWARD if absf(y.dot(Vector3.FORWARD)) < 0.9 else Vector3.RIGHT).normalized()
-		var z := x.cross(y)
-		mi.global_transform = Transform3D(Basis(x, y * ln, z), (a + b) * 0.5)
+		var run := a.distance_to(b)
+		var sag := sqrt(0.375 * run * slack * (run / maxf(L, 1e-4))) if slack > 0.0 else 0.0
+		var d := (b - a) / maxf(run, 1e-5)
+		var down := (Vector3.DOWN - d * d.dot(Vector3.DOWN))
+		down = down.normalized() if down.length() > 1e-3 else Vector3.ZERO
+		for k in SAMPLES + (1 if i == n - 1 else 0):
+			var t := float(k) / SAMPLES
+			pts.append(a.lerp(b, t) + down * sag * 4.0 * t * (1.0 - t))
+	if pts.size() < 2:
+		return
+	_im.surface_begin(Mesh.PRIMITIVE_TRIANGLES, _mat)
+	var along := 0.0
+	var prev_ring: Array = []
+	var prev_v := 0.0
+	var side := Vector3.ZERO
+	for k in pts.size():
+		var t := (pts[mini(k + 1, pts.size() - 1)] - pts[maxi(k - 1, 0)]).normalized()
+		if k > 0:
+			along += pts[k].distance_to(pts[k - 1])
+		if side == Vector3.ZERO or absf(side.dot(t)) > 0.9:
+			side = t.cross(Vector3.UP if absf(t.y) < 0.9 else Vector3.RIGHT).normalized()
+		side = (side - t * side.dot(t)).normalized()  # parallel transport: no twisting seams
+		var up := t.cross(side)
+		var ring: Array = []
+		for j in SIDES + 1:
+			var ang := TAU * j / SIDES
+			var nrm := side * cos(ang) + up * sin(ang)
+			ring.append([pts[k] + nrm * radius, nrm, float(j) / SIDES])
+		var v := along / (radius * 9.0)  # one strand pitch every ~9 radii, like laid cord
+		if prev_ring.size() > 0:
+			for j in SIDES:
+				# both windings (cheap at this size): whichever way the ring turns, the outside shows
+				for q in [[prev_ring[j], prev_v], [ring[j], v], [ring[j + 1], v], [prev_ring[j], prev_v], [ring[j + 1], v], [prev_ring[j + 1], prev_v],
+						[prev_ring[j], prev_v], [ring[j + 1], v], [ring[j], v], [prev_ring[j], prev_v], [prev_ring[j + 1], prev_v], [ring[j + 1], v]]:
+					var e: Array = q[0]
+					_im.surface_set_normal(e[1])
+					_im.surface_set_uv(Vector2(e[2], q[1]))
+					_im.surface_add_vertex(e[0])
+		prev_ring = ring
+		prev_v = v
+	_im.surface_end()

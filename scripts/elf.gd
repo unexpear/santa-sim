@@ -121,6 +121,13 @@ var _speed_blend := 0.0
 var _crouch_blend := 0.0
 var _idle_t := 0.0
 var _hips_rest := Vector3.ZERO
+var _leg_rest_l := Vector3.ZERO
+var _leg_rest_r := Vector3.ZERO
+## Leg length in model units (hip pivot to the sole, incl. the curly shoe), build_models.py.
+const LEG_LEN_MU := 0.16
+## The old crawl pose (legs straight back at hip height, over a dropped torso: the boots rode up
+## through the elf's back). Only the --bootcheck before/after still sets this.
+static var legacy_legs := false
 var _jump_queued := false
 ## Body pushback: the arms, wrist launcher, nose and ears reach past the collision capsule; when
 ## they would go into a wall, door or furniture side the whole model eases back (horizontally) so
@@ -175,6 +182,8 @@ func visibility_mult() -> float:
 
 
 func _ready() -> void:
+	add_to_group("door_blocker")  # swinging doors stop against the elf
+	set_meta("block_radius", ES.radius())
 	collision_layer = 0
 	collision_mask = 4
 	floor_max_angle = deg_to_rad(48)
@@ -243,6 +252,9 @@ func _ready() -> void:
 	leg_r = model.find_child("LegR", true, false) as Node3D
 	if hips:
 		_hips_rest = hips.position
+	if leg_l and leg_r:
+		_leg_rest_l = leg_l.position
+		_leg_rest_r = leg_r.position
 	goggle_light = OmniLight3D.new()
 	goggle_light.light_color = Color(0.4, 1.0, 0.35)
 	goggle_light.light_energy = goggle_light_energy
@@ -562,8 +574,12 @@ func _animate(delta: float, speed: float) -> void:
 	hips.position = _hips_rest + Vector3(0, -0.075 * c - absf(s) * 0.015 * w * (1.0 - c) + sin(_idle_t * 2.2) * 0.003, 0.03 * c)
 	hips.rotation = Vector3(deg_to_rad(18.0 * sneak + 6.0 * w * (1.0 - c)) - deg_to_rad(78.0) * c, sin(_phase * 0.5) * 0.08 * w, sin(_phase) * 0.05 * w)
 	# legs: high tiptoe steps standing; knees back (kneeling) and a small shuffle when crawling
-	leg_l.rotation = Vector3(lerpf(s * 0.7 * w, -1.5 + s * 0.25 * w, c), 0, 0)
-	leg_r.rotation = Vector3(lerpf(-s * 0.7 * w, -1.5 - s * 0.25 * w, c), 0, 0)
+	# crawl: the leg pivots drop and slide back with the hips (they are siblings of Hips in the
+	# rig), and the legs angle back-and-down just enough that the soles reach the floor: knees
+	# under the belly, boots trailing low behind on the floor, never up over the back.
+	var kneel := -_floor_leg_angle(_hips_rest.y - 0.075) if not legacy_legs else -1.5
+	leg_l.rotation = Vector3(lerpf(s * 0.7 * w, kneel + s * 0.2 * w, c), 0, 0)
+	leg_r.rotation = Vector3(lerpf(-s * 0.7 * w, kneel - s * 0.2 * w, c), 0, 0)
 	# arms: held up sneakily standing; reaching forward to the floor when crawling
 	var raise := 0.9 * (1.0 - w * 0.4)
 	arm_l.rotation = Vector3(lerpf(-raise - s * 0.4 * w, 0.2 - s * 0.35 * w, c), 0, -0.35 - 0.15 * sin(_idle_t * 1.7))
@@ -590,6 +606,7 @@ func _animate(delta: float, speed: float) -> void:
 	if _pistol:
 		_pistol.visible = tb > 0.3
 	_apply_pose(delta)
+	_legs_follow_hips(c)
 	if absf(lean) > 0.01:
 		hips.rotation.z -= lean * deg_to_rad(lean_angle_deg)
 		head.rotation.z -= lean * deg_to_rad(lean_angle_deg * 0.5)
@@ -805,6 +822,26 @@ func _make_pistol() -> Node3D:
 	return p
 
 
+## Angle (rad, back from vertical) at which a leg hung from a pivot at height h (model units)
+## just reaches the floor.
+func _floor_leg_angle(h: float) -> float:
+	return acos(clampf(h / LEG_LEN_MU, 0.0, 1.0))
+
+
+## In the low poses (crawl, kneeling peeks) the leg pivots move with the hips, so the legs stay
+## attached under the body instead of floating at standing hip height.
+func _legs_follow_hips(c: float) -> void:
+	if legacy_legs or leg_l == null:
+		return
+	var ground := c
+	if _pose_last in ["peek", "grate_peek", "mantle", "flip"]:
+		ground = maxf(ground, _pose_blend)
+	ground *= 1.0 - _tac_blend
+	var off := (hips.position - _hips_rest) * ground
+	leg_l.position = _leg_rest_l + off
+	leg_r.position = _leg_rest_r + off
+
+
 ## Cutscene / rope poses, blended in over the procedural animation.
 func _apply_pose(delta: float) -> void:
 	if pose != "":
@@ -825,8 +862,8 @@ func _apply_pose(delta: float) -> void:
 		"peek":  # kneeling at the lip, leaning right over the hole, head down
 			hp = Vector3(0, -0.06, -0.05)
 			hr = Vector3(deg_to_rad(-50), 0, 0)
-			ll = Vector3(-1.45, 0, 0.1)
-			lr = Vector3(-1.45, 0, -0.1)
+			ll = Vector3(-1.45 if legacy_legs else -_floor_leg_angle(_hips_rest.y - 0.06), 0, 0.1)
+			lr = Vector3(-1.45 if legacy_legs else -_floor_leg_angle(_hips_rest.y - 0.06), 0, -0.1)
 			al = Vector3(-1.2, 0, -0.25)
 			ar = Vector3(-1.2, 0, 0.25)
 			hd = Vector3(deg_to_rad(-38) + wob * 0.03, sin(_idle_t * 1.4) * 0.2, 0)
@@ -841,8 +878,8 @@ func _apply_pose(delta: float) -> void:
 		"abseil":  # sitting back in the harness, feet on the wall, braking hand low, guide hand up
 			hp = Vector3(0, 0, 0.02)
 			hr = Vector3(deg_to_rad(28), 0, 0)
-			ll = Vector3(-1.25 + wob * 0.12, 0, 0.12)
-			lr = Vector3(-1.25 - wob * 0.12, 0, -0.12)
+			ll = Vector3((-1.25 if legacy_legs else 1.25) + wob * 0.12, 0, 0.12)  # feet forward, on the wall
+			lr = Vector3((-1.25 if legacy_legs else 1.25) - wob * 0.12, 0, -0.12)
 			al = Vector3(-2.7, 0, -0.15)
 			ar = Vector3(-0.5, 0, 0.5)
 			hd = Vector3(deg_to_rad(-20), 0, 0)
@@ -857,8 +894,8 @@ func _apply_pose(delta: float) -> void:
 		"zip":  # hanging from the hand trolley, knees tucked up
 			hp = Vector3(0, 0.02, 0)
 			hr = Vector3(deg_to_rad(-8), 0, 0)
-			ll = Vector3(-1.1, 0, 0.08)
-			lr = Vector3(-1.0, 0, -0.08)
+			ll = Vector3(-1.1 if legacy_legs else 1.1, 0, 0.08)  # knees tucked up in front
+			lr = Vector3(-1.0 if legacy_legs else 1.0, 0, -0.08)
 			al = Vector3(-3.0, 0, -0.08)
 			ar = Vector3(-3.0, 0, 0.08)
 			hd = Vector3(deg_to_rad(5), 0, 0)
@@ -866,8 +903,8 @@ func _apply_pose(delta: float) -> void:
 			var c2 := sin(_phase)
 			hp = Vector3(0, 0, 0.0)
 			hr = Vector3(deg_to_rad(-8), 0, 0)
-			ll = Vector3(-0.9 + c2 * 0.45, 0, 0.1)
-			lr = Vector3(-0.9 - c2 * 0.45, 0, -0.1)
+			ll = Vector3((-0.9 if legacy_legs else 0.45) + c2 * 0.4, 0, 0.1)  # toes in toward the wall
+			lr = Vector3((-0.9 if legacy_legs else 0.45) - c2 * 0.4, 0, -0.1)
 			al = Vector3(-2.6 - c2 * 0.35, 0, -0.2)
 			ar = Vector3(-2.6 + c2 * 0.35, 0, 0.2)
 			hd = Vector3(deg_to_rad(-25), 0, 0)
@@ -882,8 +919,8 @@ func _apply_pose(delta: float) -> void:
 		"grate_peek":  # low in the firebox, peeking out past the grate
 			hp = Vector3(0, -0.085, 0.02)
 			hr = Vector3(deg_to_rad(-35), 0, 0)
-			ll = Vector3(-1.6, 0, 0.1)
-			lr = Vector3(-1.6, 0, -0.1)
+			ll = Vector3(-1.6 if legacy_legs else -_floor_leg_angle(_hips_rest.y - 0.085), 0, 0.1)
+			lr = Vector3(-1.6 if legacy_legs else -_floor_leg_angle(_hips_rest.y - 0.085), 0, -0.1)
 			al = Vector3(-1.4, 0, -0.2)
 			ar = Vector3(-0.9, 0, 0.3)
 			hd = Vector3(deg_to_rad(15), sin(_idle_t * 1.1) * 0.45, 0)

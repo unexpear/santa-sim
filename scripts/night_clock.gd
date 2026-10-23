@@ -23,8 +23,19 @@ const PER_HOUSE_SECONDS := 150.0
 const SLACK := 3.0  ## the night is 3x the bare delivery time (exploring, hiding, mistakes)
 
 @export var house_count := 3  ## delivery houses in this run / town (the streamed map sets this)
-@export var sunset_hour := 20.0  ## Sydney, late December: sunset about 8:05 pm
-@export var sunrise_hour := 5.75  ## ...sunrise about 5:45 am
+## The real place and night: the sun and moon are computed astronomically (scripts/astro.gd) for
+## this spot on Christmas Eve -> Christmas morning; the compressed clock maps onto real solar time.
+## Default: Paddington, Sydney (AEDT, UTC+11): sunset ~8:07 pm at azimuth ~241 (WSW), sunrise
+## ~5:43 am at ~119 (ESE). The OSM map's Paddington is Brisbane: -27.4598, 152.9985, UTC+10.
+@export var latitude := -33.88
+@export var longitude := 151.23
+@export var utc_offset := 11.0
+@export var year := 2026
+var sunset_hour := 20.0  ## computed in _ready from the astronomy
+var sunrise_hour := 5.75
+var sunset_az := 241.0
+var sunrise_az := 119.0
+var moon_info := {}
 @export var lead_in_hours := 0.25  ## the run starts a little before sunset (golden light)
 @export var night_seconds_override := 0.0  ## > 0: fixed night length in real seconds (tests)
 @export var scrub_rate := 900.0  ## debug: holding F8 (Shift+F8 back) runs the clock this many x faster
@@ -35,6 +46,9 @@ const DEEP_SKY := 0.38
 const DEEP_HOR := 0.45
 const DEEP_AMBIENT := 0.75
 const DEEP_EXPOSURE := 0.9
+const TWILIGHT_EXPOSURE := 0.78  ## sunset/sunrise: darker than the night art palette
+const TWILIGHT_AMBIENT := 0.6
+const SUN_ENERGY := 0.9
 var deep := 0.0  ## 0 early night .. 1 solar midnight
 var night_seconds := 0.0  ## real seconds from start to sunrise
 var elapsed := 0.0
@@ -60,11 +74,24 @@ var _last_dim := -1.0
 
 func _ready() -> void:
 	add_to_group("night_clock")
+	_compute_sun_times()
 	if not InputMap.has_action("time_scrub"):
 		InputMap.add_action("time_scrub")
 		var ev := InputEventKey.new()
 		ev.physical_keycode = KEY_F8
 		InputMap.action_add_event("time_scrub", ev)
+
+
+const Astro := preload("res://scripts/astro.gd")
+
+
+func _compute_sun_times() -> void:
+	sunset_hour = Astro.sun_cross_hour(latitude, longitude, year, utc_offset, true)
+	sunrise_hour = Astro.sun_cross_hour(latitude, longitude, year, utc_offset, false)
+	sunset_az = float(Astro.sun(Astro.jd_for_local_hour(sunset_hour, year, utc_offset), latitude, longitude).az)
+	sunrise_az = float(Astro.sun(Astro.jd_for_local_hour(sunrise_hour, year, utc_offset), latitude, longitude).az)
+	var mi := Astro.moon(Astro.jd_for_local_hour(0.0, year, utc_offset), latitude, longitude)
+	print("[night] %.4f, %.4f UTC%+d, Dec 24-25 %d: sunset %s az %.0f, sunrise %s az %.0f; moon %.0f%% lit (%s)" % [latitude, longitude, int(utc_offset), year, clock_text(sunset_hour), sunset_az, clock_text(sunrise_hour), sunrise_az, float(mi.illum) * 100.0, "waxing" if mi.waxing else "waning"])
 
 
 static func night_length_for(houses: int) -> float:
@@ -99,7 +126,8 @@ func bind(p_env: Environment, p_sky: ShaderMaterial, p_moon: DirectionalLight3D,
 		sun = DirectionalLight3D.new()
 		sun.name = "Sun"
 		sun.light_color = Color(1.0, 0.62, 0.32)
-		sun.shadow_enabled = false  # low sun only at the ends of the night; the moon keeps the shadows
+		sun.shadow_enabled = false  # switched on while the sun is up (long sunset shadows)
+		sun.directional_shadow_max_distance = 120.0
 		sun.light_cull_mask = 0xFFFFF & ~2
 		add_child(sun)
 
@@ -183,21 +211,17 @@ func state() -> Dictionary:
 var _night_h := 9.75
 
 
+var _sun_vec := Vector3(0, -1, 0)
+var _moon_vec := Vector3(0, 1, 0)
+
+
+## Unit vector toward the sun / moon in world space (+X east, -Z north). Light travels along -this.
 func _sun_dir() -> Vector3:
-	# sets in the west-north-west, rises in the east-south-east (southern summer); below the horizon
-	# all night. Direction the light TRAVELS is -this.
-	var t := _since_sunset(hour)
-	var a := deg_to_rad(sun_alt_deg)
-	var az := lerpf(deg_to_rad(-60.0), deg_to_rad(-300.0), clampf((t + 0.5) / (_night_h + 1.0), 0.0, 1.0))
-	return Vector3(cos(a) * sin(az), sin(a), cos(a) * cos(az)).normalized()
+	return _sun_vec
 
 
 func _moon_dir() -> Vector3:
-	# a near-full Christmas moon: rises in the east at dusk, high over the north at midnight, sets west at dawn
-	var t := clampf(_since_sunset(hour) / _night_h, -0.1, 1.1)
-	var alt := deg_to_rad(10.0 + 48.0 * sin(clampf(t, 0.0, 1.0) * PI))
-	var az := lerpf(deg_to_rad(110.0), deg_to_rad(-110.0), t)
-	return Vector3(cos(alt) * sin(az) * -1.0, sin(alt), -cos(alt) * cos(az)).normalized()
+	return _moon_vec
 
 
 func _apply() -> void:
@@ -205,13 +229,12 @@ func _apply() -> void:
 	hour = _hour_at(minf(k, 1.0)) if k <= 1.0 else fposmod(sunrise_hour + (k - 1.0) * 6.0, 24.0)
 	_night_h = fposmod(sunrise_hour - sunset_hour, 24.0)
 	var t := _since_sunset(hour)
-	# sun altitude: about -12 deg per hour after sunset, ~-40 deg at midnight, rising again
-	if t <= 0.0:
-		sun_alt_deg = -t * 12.0
-	elif t >= _night_h:
-		sun_alt_deg = (t - _night_h) * 12.0
-	else:
-		sun_alt_deg = -40.0 * sin(PI * t / _night_h)  # ~ -12.9 deg/h at each end, -40 at solar midnight
+	var jd := Astro.jd_for_local_hour(hour, year, utc_offset)
+	var sp := Astro.sun(jd, latitude, longitude)
+	sun_alt_deg = float(sp.alt)
+	_sun_vec = Astro.dir_from(sun_alt_deg, float(sp.az))
+	moon_info = Astro.moon(jd, latitude, longitude)
+	_moon_vec = Astro.dir_from(maxf(float(moon_info.alt), -10.0), float(moon_info.az))
 	var dawn := t > _night_h * 0.5  # pre-dawn / sunrise palette vs sunset / dusk
 	# 0 = sun up .. 1 = full night (astronomical-ish), from the sun's altitude
 	var night := clampf(-sun_alt_deg / 14.0, 0.0, 1.0)
@@ -224,43 +247,54 @@ func _apply() -> void:
 	deep = deep * deep * (3.0 - 2.0 * deep)
 	if env == null:
 		return
-	# sky: sunset (warm, light) -> dusk -> the art-directed night -> pre-dawn (pink) -> sunrise
+	# twilight: 1 while the sun is near/above the horizon (sun +2 .. -9 deg), the warm glow on the
+	# sun's side of the sky and the darker, warm-lit landscape of a real sunset
+	var twi := clampf((sun_alt_deg + 9.0) / 11.0, 0.0, 1.0)
+	var sunlit := clampf((sun_alt_deg + 1.0) / 4.0, 0.0, 1.0)
 	if sky_mat:
-		var day_top := Vector3(0.22, 0.36, 0.62) if not dawn else Vector3(0.3, 0.42, 0.66)
-		var day_mid := Vector3(0.85, 0.48, 0.42) if not dawn else Vector3(0.95, 0.62, 0.6)
-		var day_hor := Vector3(1.0, 0.55, 0.18) if not dawn else Vector3(1.0, 0.7, 0.42)
-		var dusk_hor := Vector3(0.95, 0.42, 0.22) if not dawn else Vector3(0.92, 0.5, 0.48)
+		# overhead and the far (eastern at sunset) side: deep blue / purple, never pale
+		var tw_top := Vector3(0.07, 0.10, 0.26) if not dawn else Vector3(0.09, 0.12, 0.30)
+		var tw_mid := Vector3(0.20, 0.15, 0.36) if not dawn else Vector3(0.26, 0.18, 0.40)
+		var tw_hor := Vector3(0.32, 0.20, 0.36) if not dawn else Vector3(0.40, 0.26, 0.42)
 		var nb: Vector3 = _base.top
 		var nm: Vector3 = _base.mid
 		var nh: Vector3 = _base.hor
-		var e1 := clampf(night * 2.0, 0.0, 1.0)  # day -> dusk
-		var e2 := clampf(night * 2.0 - 1.0, 0.0, 1.0)  # dusk -> night
-		var hor := day_hor.lerp(dusk_hor, e1).lerp(nh, e2) * lerpf(1.0, DEEP_HOR, deep)
-		sky_mat.set_shader_parameter("top_color", day_top.lerp(nb.lerp(day_top, 0.25), e1).lerp(nb, e2) * lerpf(1.0, DEEP_SKY, deep))
-		sky_mat.set_shader_parameter("mid_color", day_mid.lerp(nm, night) * lerpf(1.0, DEEP_SKY, deep))
-		sky_mat.set_shader_parameter("horizon_color", hor)
-		sky_mat.set_shader_parameter("cloud_color", (_base.cloud as Vector3) * lerpf(1.0, DEEP_SKY, deep))
-		sky_mat.set_shader_parameter("cloud_lit_color", (_base.cloud_lit as Vector3).lerp(_base.cloud as Vector3, deep) * lerpf(1.0, DEEP_SKY + 0.15, deep))
+		var dk := lerpf(1.0, DEEP_SKY, deep)
+		sky_mat.set_shader_parameter("top_color", tw_top.lerp(nb, night) * dk)
+		sky_mat.set_shader_parameter("mid_color", tw_mid.lerp(nm, night) * dk)
+		sky_mat.set_shader_parameter("horizon_color", tw_hor.lerp(nh, night) * lerpf(1.0, DEEP_HOR, deep))
+		sky_mat.set_shader_parameter("cloud_color", (_base.cloud as Vector3) * dk * lerpf(1.0, 0.7, twi))
+		var warm := Vector3(1.0, 0.45, 0.2) if not dawn else Vector3(1.0, 0.55, 0.4)
+		sky_mat.set_shader_parameter("cloud_lit_color", (_base.cloud_lit as Vector3).lerp(_base.cloud as Vector3, deep).lerp(warm, twi * 0.8) * lerpf(1.0, DEEP_SKY + 0.15, deep))
 		sky_mat.set_shader_parameter("star_amount", (0.35 + 0.45 * deep) * clampf((night - 0.45) / 0.55, 0.0, 1.0))
 		sky_mat.set_shader_parameter("moon_dir", _moon_dir())
 		sky_mat.set_shader_parameter("sun_dir", _sun_dir())
-		sky_mat.set_shader_parameter("sun_amount", clampf((sun_alt_deg + 4.0) / 4.0, 0.0, 1.0))
-		sky_mat.set_shader_parameter("sun_color", Vector3(1.0, 0.55, 0.22) if not dawn else Vector3(1.0, 0.68, 0.38))
-	# The models' lighting stays the art-directed look (ambient, fog, exposure, fill/rim: the values
-	# main.gd set up). Sunset/sunrise only colour the SKY; around solar midnight things go a bit darker.
-	# (An earlier version brightened ambient + fog toward a "day" palette: it washed every model out.)
+		sky_mat.set_shader_parameter("sun_amount", clampf((sun_alt_deg + 1.5) / 2.5, 0.0, 1.0))
+		sky_mat.set_shader_parameter("sun_color", Vector3(1.0, 0.42, 0.14) if not dawn else Vector3(1.0, 0.55, 0.28))
+		sky_mat.set_shader_parameter("twilight_glow", twi)
+		sky_mat.set_shader_parameter("glow_color", Vector3(1.0, 0.36, 0.12) if not dawn else Vector3(1.0, 0.48, 0.3))
+		sky_mat.set_shader_parameter("moon_lit_dir", _sun_vec)
+	# Model lighting: the art-directed values from main.gd, DARKER (never brighter, never foggier)
+	# at sunset/sunrise (the low sun does the warm light) and a little darker at solar midnight.
 	env.ambient_light_color = _base.amb
-	env.ambient_light_energy = float(_base.amb_e) * lerpf(1.0, DEEP_AMBIENT, deep)
-	env.volumetric_fog_albedo = (_base.fog as Color).darkened(0.35 * deep)
-	env.tonemap_exposure = float(_base.exp) * lerpf(1.0, DEEP_EXPOSURE, deep)
+	env.ambient_light_energy = float(_base.amb_e) * lerpf(1.0, DEEP_AMBIENT, deep) * lerpf(1.0, TWILIGHT_AMBIENT, twi)
+	env.volumetric_fog_albedo = (_base.fog as Color).darkened(0.35 * deep + 0.25 * twi)
+	env.tonemap_exposure = float(_base.exp) * lerpf(1.0, DEEP_EXPOSURE, deep) * lerpf(1.0, TWILIGHT_EXPOSURE, twi)
 	if sun:
 		var sd := _sun_dir()
-		sun.visible = sun_alt_deg > -3.0
-		sun.light_energy = clampf((sun_alt_deg + 3.0) / 8.0, 0.0, 1.0) * 0.3  # a low warm glint, not a fill
+		sun.visible = sunlit > 0.0
+		sun.light_energy = sunlit * SUN_ENERGY  # low, warm, long shadows
+		sun.light_color = Color(1.0, 0.5, 0.24) if not dawn else Color(1.0, 0.62, 0.4)
+		sun.shadow_enabled = sunlit > 0.0
 		if sun.visible:
 			sun.look_at_from_position(Vector3.ZERO, -sd, Vector3.UP if absf(sd.y) < 0.99 else Vector3.FORWARD)
 	if moon:
-		moon.light_energy = float(_base.moon_e) * lerpf(0.6, 1.0, night)
+		# moonlight from the real moon: its phase and whether it is up
+		var up := clampf((float(moon_info.get("alt", 30.0)) + 2.0) / 8.0, 0.0, 1.0)
+		moon.light_energy = float(_base.moon_e) * lerpf(0.6, 1.0, night) * lerpf(0.35, 1.0, up * float(moon_info.get("illum", 1.0)))
+		if up > 0.0:
+			var md := _moon_dir()
+			moon.look_at_from_position(Vector3.ZERO, -md, Vector3.UP if absf(md.y) < 0.99 else Vector3.FORWARD)
 	if fill:
 		fill.light_energy = float(_base.fill_e) * lerpf(1.0, 0.7, deep)
 	if rim:

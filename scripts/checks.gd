@@ -1060,8 +1060,11 @@ func wall_door_check(h: Node3D) -> void:
 		await _frames(2)
 		if gadgets.call("door_in_reach") != dr:
 			fail("%s: %s not in E reach from %.2f m" % [h.name, dr.name, 0.4])
-		gadgets.call("use_door", dr)
-		await _wait(1.0)
+		for press in 4:  # E again while it's still swinging open (the player keeps leaning / pulling)
+			gadgets.call("use_door", dr)
+			await _wait(0.8)
+			if float(dr.get("angle")) > 45.0:
+				break
 		if float(dr.get("angle")) < float(dr.get("open_angle")) - 1.0:
 			# it swung toward us (the far side is obstructed) and is waiting: step back out of its arc
 			elf.global_position = floor_under(mid + n * side2 * 1.15 + Vector3(0, 0.1, 0)) + Vector3(0, 0.02, 0)
@@ -3166,12 +3169,25 @@ func night_shots(m: Node3D, d: String) -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	await _wait(2.0)
 	var clock: Node = m.get("night_clock")
-	for e in [["night_sunset", 20.0], ["night_dusk", 20.6], ["night_midnight", 0.0], ["night_predawn", 5.1], ["night_sunrise", 5.8]]:
-		clock.call("set_hour", float(e[1]))
+	var A := load("res://scripts/astro.gd")
+	var ss := float(clock.get("sunset_hour"))
+	var sr := float(clock.get("sunrise_hour"))
+	var sl: Node3D = m.get("sleigh")
+	var eye := sl.global_position + Vector3(0, 5.0, 0)
+	clean_screen()
+	# [still, hour, look azimuth (deg from north; -1 = toward the sun), look altitude]
+	for e in [["night_sunset", ss - 0.05, -1.0, 6.0], ["night_sunset_east", ss - 0.05, -2.0, 10.0], ["night_dusk", ss + 0.45, -1.0, 6.0],
+			["night_midnight", 0.0, 0.0, 20.0], ["night_predawn", sr - 0.5, -1.0, 6.0], ["night_sunrise", sr + 0.05, -1.0, 6.0]]:
+		clock.call("set_hour", fposmod(float(e[1]), 24.0))
+		var sd: Vector3 = clock.call("_sun_dir")
+		var saz := fposmod(rad_to_deg(atan2(sd.x, -sd.z)), 360.0)
+		var az := saz if float(e[2]) == -1.0 else (fposmod(saz + 180.0, 360.0) if float(e[2]) == -2.0 else float(e[2]))
+		cut_look(eye, eye + A.dir_from(float(e[3]), az) * 50.0)
 		await _wait(0.6)
 		var st: Dictionary = clock.call("state")
 		await grab(str(e[0]))
-		print("[night] %s: %s sun %.1f deg, lights_on %.2f, interior %.2f, %s" % [e[0], st.text, st.sun_alt_deg, st.lights_on, st.interior_dim, await fps_here(str(e[0]), 1.5)])
+		var mi: Dictionary = clock.get("moon_info")
+		print("[night] %s: %s sun alt %.1f az %.0f (looking %.0f), moon alt %.0f az %.0f %.0f%% lit, lights_on %.2f, %s" % [e[0], st.text, st.sun_alt_deg, saz, az, float(mi.alt), float(mi.az), float(mi.illum) * 100.0, st.lights_on, await fps_here(str(e[0]), 1.5)])
 	for n in [1, 3, 20, 200]:
 		print("[night] %d houses -> night %.1f min" % [n, float(clock.call("night_length_for", n)) / 60.0])
 	print("[check] nightshots done")

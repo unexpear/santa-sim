@@ -8,7 +8,8 @@ extends "res://scripts/checks.gd"
 ##           the elf alone can't move a heavy front door; a light door it can
 ##   lever tip, catapult onto a table, spool winch
 ## Stills (windowed): handle_types, trick_pulley, trick_lever, trick_catapult, trick_door_rope,
-## trick_counterweight.
+## trick_counterweight, rig_parts_closeup. All parts come from the shared library
+## (scripts/mech/part_models.gd + assets/models/rig_parts.glb).
 
 const Mech := preload("res://scripts/mech/mech.gd")
 const Parts := preload("res://scripts/mech/parts.gd")
@@ -37,6 +38,7 @@ func mech_check(m: Node3D, d: String) -> void:
 	await catapult_rig()
 	await winch_rig()
 	await handle_types_still()
+	await parts_closeup()
 	for r in results:
 		print("[mech] " + str(r))
 	print("[check] mechcheck %s" % ("PASS" if ok else "FAIL"))
@@ -65,10 +67,27 @@ func _new_rig(cam_from: Vector3, cam_at: Vector3) -> Node3D:
 	bs.size = Vector3(6, 0.1, 3)
 	cs.shape = bs
 	fl.add_child(cs)
-	GB.box(fl, bs.size, Vector3.ZERO, Color(0.55, 0.42, 0.3))
 	rig.add_child(fl)
 	fl.position = Vector3(0, -0.05, 0)
-	GB.box(rig, Vector3(6, 2.4, 0.05), Vector3(0, 1.2, -0.8), Color(0.78, 0.74, 0.66))
+	# a real room corner, house materials: floorboards, papered wall, skirting, a side wall
+	var boards := GB.mat(Color(0.6, 0.44, 0.3)).duplicate() as ShaderMaterial
+	boards.set_shader_parameter("pattern", 3)
+	boards.set_shader_parameter("pattern_color", Color(0.6, 0.44, 0.3).darkened(0.2))
+	boards.set_shader_parameter("pattern_scale", 0.35)
+	var paper := GB.mat(Color(0.8, 0.74, 0.62)).duplicate() as ShaderMaterial
+	paper.set_shader_parameter("pattern", 1)
+	paper.set_shader_parameter("pattern_color", Color(0.72, 0.6, 0.5))
+	paper.set_shader_parameter("pattern_scale", 1.0)
+	var floor_mi := GB.box(fl, bs.size, Vector3.ZERO, Color(0.6, 0.44, 0.3))
+	floor_mi.material_override = boards
+	var wall := GB.box(rig, Vector3(6, 2.4, 0.05), Vector3(0, 1.2, -0.8), Color(0.8, 0.74, 0.62))
+	wall.material_override = paper
+	var side := GB.box(rig, Vector3(0.05, 2.4, 3.0), Vector3(-1.6, 1.2, 0.7), Color(0.8, 0.74, 0.62))
+	side.material_override = paper
+	var trim := Color(0.95, 0.93, 0.88)
+	GB.box(rig, Vector3(6, 0.1, 0.018), Vector3(0, 0.05, -0.766), trim)
+	GB.box(rig, Vector3(6, 0.012, 0.024), Vector3(0, 0.104, -0.766), trim)
+	GB.box(rig, Vector3(0.018, 0.1, 3.0), Vector3(-1.566, 0.05, 0.7), trim)
 	var l := OmniLight3D.new()
 	l.omni_range = 6.0
 	l.light_energy = 2.2
@@ -102,7 +121,10 @@ func _label(text: String, p: Vector3, size := 0.03) -> void:
 func pulley_rig(n: int, still := "") -> float:
 	await _new_rig(Vector3(0.15, 0.7, 1.6), Vector3(0.15, 0.6, 0))
 	var beam_y := 1.2
-	GB.box(rig, Vector3(0.8, 0.04, 0.06), Vector3(0.1, beam_y + 0.04, 0), Color(0.45, 0.3, 0.2))
+	var shelf := GB.mat(Color(0.62, 0.44, 0.28))
+	GB.box(rig, Vector3(0.9, 0.025, 0.22), Vector3(0.1, beam_y + 0.08, -0.06), Color(0.62, 0.44, 0.28)).material_override = shelf
+	for bx: float in [-0.3, 0.5]:
+		GB.box(rig, Vector3(0.02, 0.16, 0.02), Vector3(bx, beam_y, -0.16), Color(0.3, 0.3, 0.32))
 	var pr := Parts.present(rig, ORIGIN + Vector3(0, 0.08, 0))
 	var elf := Parts.elf_body(rig, ORIGIN + Vector3(0.35, 0.9, 0))
 	var r: Node3D = Parts.rope(rig)
@@ -116,13 +138,13 @@ func pulley_rig(n: int, still := "") -> float:
 		2:
 			var hook := ORIGIN + Vector3(-0.04, beam_y, 0)
 			GB.sphere(rig, 0.008, hook - ORIGIN, Color(0.3, 0.3, 0.3))
-			var block := Parts.sheave(pr, pr.global_position + top + Vector3(0, 0.03, 0))
+			var block := Parts.sheave(pr, pr.global_position + top + Vector3(0, 0.03, 0), 0.02, true)
 			var s1 := Parts.sheave(rig, ORIGIN + Vector3(0.04, beam_y, 0))
 			r.add_world_point(null, hook)
 			r.add_point(block, Vector3.ZERO)
 			r.add_point(s1, Vector3.ZERO)
 		3:
-			var block := Parts.sheave(pr, pr.global_position + top + Vector3(0.04, 0.03, 0))
+			var block := Parts.sheave(pr, pr.global_position + top + Vector3(0.04, 0.03, 0), 0.02, true)
 			var f1 := Parts.sheave(rig, ORIGIN + Vector3(-0.04, beam_y, 0))
 			var f2 := Parts.sheave(rig, ORIGIN + Vector3(0.04, beam_y + 0.04, 0))
 			r.add_world_point(pr, pr.global_position + top + Vector3(-0.04, 0, 0))
@@ -208,7 +230,7 @@ func handle_rigs() -> void:
 	r.queue_free()
 	elf.queue_free()
 	await _frames(2)
-	var cw := Parts.weight(rig, h.global_position + Vector3(0.03, -0.35, 0.08), 1.0)
+	var cw := Parts.weight(rig, h.global_position + Vector3(0.03, -0.35, 0.08), 1.0, "sack")
 	var r2: Node3D = Parts.rope(rig)
 	r2.add_world_point(cw, cw.global_position + Vector3(0, 0.03, 0))
 	r2.call("wrap_start", h, 0.028, cw.global_position, -1.0)
@@ -258,19 +280,19 @@ func handle_rigs() -> void:
 ## A ruler on a crayon: the elf drops onto the long end and tips a book up on the short end.
 func lever_rig() -> void:
 	await _new_rig(Vector3(0.0, 0.35, 0.9), Vector3(0.0, 0.08, 0))
-	Parts.fulcrum(rig, ORIGIN + Vector3(0, 0.015, 0))
-	var pl := Parts.plank(rig, ORIGIN + Vector3(0, 0.036, 0), 0.4, 0.06)
-	var book := Parts.box_body(rig, Vector3(0.1, 0.03, 0.08), ORIGIN + Vector3(-0.15, 0.06, 0), 0.4, Color(0.2, 0.35, 0.7), "Book")
+	Parts.fulcrum(rig, ORIGIN + Vector3(0, 0.006, 0), 0.006, 0.1)
+	var pl := Parts.plank(rig, ORIGIN + Vector3(0, 0.0142, 0), 0.3, 0.025, 0.03, 0.0035)
+	var book := Parts.book(rig, ORIGIN + Vector3(-0.1, 0.032, 0), 0.4, Vector3(0.15, 0.025, 0.21), 0.0)
 	await _wait(0.8)
 	var y0 := book.global_position.y
-	var elf := Parts.elf_body(rig, ORIGIN + Vector3(0.17, 0.25, 0))
+	var elf := Parts.elf_body(rig, ORIGIN + Vector3(0.13, 0.25, 0))
 	var best := 0.0
 	for i in 90:
 		await main.get_tree().physics_frame
 		best = maxf(best, book.global_position.y - y0)
 		if i == 30:
 			await grab("trick_lever")
-	_res(best > 0.02, "lever: ruler on a crayon, elf (0.5 kg at 17 cm) vs book (0.4 kg at 15 cm): book rose %.3f m" % best)
+	_res(best > 0.02, "lever: 30 cm ruler on a jumbo crayon, elf (0.5 kg dropped at 13 cm) vs hardback (0.4 kg at 10 cm): book rose %.3f m" % best)
 	elf.queue_free()
 	pl.queue_free()
 
@@ -278,9 +300,9 @@ func lever_rig() -> void:
 ## Seesaw catapult: a 1.5 kg tin dropped on the short arm flings a 20 g bauble onto a side table.
 func catapult_rig() -> void:
 	await _new_rig(Vector3(0.6, 0.6, 1.6), Vector3(0.6, 0.2, 0))
-	Parts.fulcrum(rig, ORIGIN + Vector3(0, 0.02, 0), 0.02)
-	var pl := Parts.plank(rig, ORIGIN + Vector3(0.07, 0.047, 0), 0.5, 0.08, 0.06)
-	var shot := Parts.box_body(rig, Vector3(0.03, 0.03, 0.03), ORIGIN + Vector3(0.29, 0.08, 0), 0.02, Color(0.9, 0.2, 0.25), "Bauble", 0.8)
+	Parts.fulcrum(rig, ORIGIN + Vector3(0, 0.019, 0), 0.019, 0.07)
+	var pl := Parts.spoon(rig, ORIGIN + Vector3(0.07, 0.044, 0), 0.08)
+	var shot := Parts.bauble(rig, ORIGIN + Vector3(0.275, 0.074, 0))
 	# side table: 0.3 m high top, 0.5 m deep, starting 0.7 m out
 	var tb := StaticBody3D.new()
 	tb.collision_layer = Parts.LAYERS
@@ -289,11 +311,15 @@ func catapult_rig() -> void:
 	bs.size = Vector3(0.36, 0.2, 0.5)
 	cs.shape = bs
 	tb.add_child(cs)
-	GB.box(tb, bs.size, Vector3.ZERO, Color(0.5, 0.33, 0.2))
+	# a low wooden footstool: top slab and four legs
+	GB.box(tb, Vector3(bs.size.x, 0.03, bs.size.z), Vector3(0, 0.085, 0), Color(0.5, 0.33, 0.2))
+	for lx: float in [-0.15, 0.15]:
+		for lz: float in [-0.22, 0.22]:
+			GB.box(tb, Vector3(0.035, 0.17, 0.035), Vector3(lx, -0.015, lz), Color(0.45, 0.3, 0.18))
 	rig.add_child(tb)
 	tb.position = Vector3(0.62, 0.1, 0)
 	await _wait(0.6)
-	var tin := Parts.weight(rig, ORIGIN + Vector3(-0.16, 0.55, 0), 1.5, Color(0.7, 0.7, 0.75))
+	var tin := Parts.weight(rig, ORIGIN + Vector3(-0.16, 0.55, 0), 1.5, "tin")
 	var landed := false
 	var peak := 0.0
 	for i in 150:
@@ -306,7 +332,7 @@ func catapult_rig() -> void:
 			landed = true
 	var lp2 := shot.global_position - ORIGIN
 	landed = landed or (absf(lp2.x - 0.62) < 0.18 and absf(lp2.z) < 0.25 and lp2.y > 0.19)
-	_res(landed, "catapult: 1.5 kg tin from 0.5 m onto a ruler seesaw: 20 g bauble peaked %.2f m, ended at x %.2f y %.2f (side table top x 0.44-0.80, y 0.20)" % [peak, lp2.x, lp2.y])
+	_res(landed, "catapult: 1.5 kg tin of marbles from 0.5 m onto a wooden-spoon seesaw: 20 g bauble peaked %.2f m, ended at x %.2f y %.2f (side table top x 0.44-0.80, y 0.20)" % [peak, lp2.x, lp2.y])
 	tin.queue_free()
 	pl.queue_free()
 
@@ -338,3 +364,29 @@ func handle_types_still() -> void:
 		print("[mech] door %s: mass %.0f kg, hinge friction %.2f, closer %.2f N*m/rad, latch release %.2f rad" % [kinds[i], float(dr.get("mass")), float(dr.get("hinge_friction")), float(dr.get("closer_k")), float(dr.get("latch_release"))])
 	await _wait(0.5)
 	await grab("handle_types")
+
+
+## Every rig part side by side on the floor of the room corner, at real size (rig_parts_closeup).
+func parts_closeup() -> void:
+	await _new_rig(Vector3(0.05, 0.32, 0.62), Vector3(0.05, 0.05, -0.05))
+	var PM := preload("res://scripts/mech/part_models.gd")
+	var lay := [["Pulley", Vector3(-0.34, 0.06, -0.18), Vector3.ZERO], ["CottonReel", Vector3(-0.22, 0.019, -0.2), Vector3(0, 30, 0)],
+		["ReelCrank", Vector3(-0.22, 0.019, -0.2), Vector3(0, 30, 0)], ["Crayon", Vector3(-0.1, 0.006, -0.22), Vector3(0, -20, 0)],
+		["Ruler", Vector3(0.05, 0.00175, -0.12), Vector3(0, 8, 0)], ["MarbleTin", Vector3(0.28, 0.06, -0.22), Vector3.ZERO],
+		["CoalSack", Vector3(0.42, 0.065, -0.2), Vector3(0, -25, 0)], ["Present", Vector3(-0.32, 0.08, 0.05), Vector3(0, 20, 0)],
+		["Book", Vector3(-0.08, 0.0125, 0.04), Vector3(0, -12, 0)], ["Bauble", Vector3(0.12, 0.03, 0.05), Vector3.ZERO],
+		["Spoon", Vector3(0.1, 0.008, 0.18), Vector3(0, -6, 0)], ["CookiePlate", Vector3(0.36, 0.0, 0.04), Vector3.ZERO],
+		["MilkGlassEmpty", Vector3(0.47, 0.0, -0.05), Vector3.ZERO], ["LeverHandle", Vector3(-0.42, 0.0, 0.2), Vector3(-90, 0, 0)],
+		["KnobHandle", Vector3(-0.28, 0.0, 0.22), Vector3(-90, 0, 0)]]
+	for e in lay:
+		PM.add(rig, str(e[0]), e[1], e[2])
+	var r: Node3D = Parts.rope(rig)
+	r.add_world_point(null, ORIGIN + Vector3(-0.34, 0.02, -0.18))
+	r.add_world_point(null, ORIGIN + Vector3(-0.1, 0.004, -0.02))
+	r.set("rest_length", 0.5)
+	var elf := Parts.elf_body(rig, ORIGIN + Vector3(-0.02, 0.112, -0.05))
+	elf.freeze = true
+	elf.rotation_degrees = Vector3(0, 20, 0)
+	await _wait(0.5)
+	await grab("rig_parts_closeup")
+	print("[mech] parts library: %d pieces from %s" % [lay.size(), PM.PATH])

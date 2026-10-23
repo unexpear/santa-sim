@@ -20,6 +20,7 @@ signal creaked(position: Vector3, radius: float)  ## stealth hook: residents can
 const INTERIOR_LAYER := 4
 const Mech := preload("res://scripts/mech/mech.gd")
 const Rotor := preload("res://scripts/mech/rotor.gd")
+const PM := preload("res://scripts/mech/part_models.gd")
 const GB := preload("res://scripts/greybox.gd")
 
 @export var width := 0.98  ## slab width (m), fills the opening
@@ -162,8 +163,9 @@ func _build_handle() -> void:
 			r.visual = v
 			v.visible = draw_handles
 			for zs: float in [1.0, -1.0]:
-				GB.cylinder(v, 0.012, 0.012, 0.03, Vector3(0, 0, zs * (face - 0.015)), brass, Vector3(90, 0, 0))
-				GB.box(v, Vector3(0.13, 0.018, 0.022), Vector3(-0.055, 0, zs * face), brass)
+				if PM.add(v, "LeverHandle", Vector3(0, 0, zs * thickness * 0.5), Vector3.ZERO, Vector3(1, 1, zs)) == null:
+					GB.cylinder(v, 0.012, 0.012, 0.03, Vector3(0, 0, zs * (face - 0.015)), brass, Vector3(90, 0, 0))
+					GB.box(v, Vector3(0.13, 0.018, 0.022), Vector3(-0.055, 0, zs * face), brass)
 				Mech.add_attach(r, Vector3(-0.115, 0.0, zs * face), "lever_end")
 			handle = r
 		"knob":
@@ -185,8 +187,9 @@ func _build_handle() -> void:
 			r.visual = v
 			v.visible = draw_handles
 			for zs: float in [1.0, -1.0]:
-				GB.cylinder(v, 0.01, 0.01, 0.05, Vector3(0, 0, zs * (face - 0.02)), brass, Vector3(90, 0, 0))
-				GB.sphere(v, 0.028, Vector3(0, 0, zs * (face + 0.012)), brass)
+				if PM.add(v, "KnobHandle", Vector3(0, 0, zs * thickness * 0.5), Vector3.ZERO, Vector3(1, 1, zs)) == null:
+					GB.cylinder(v, 0.01, 0.01, 0.05, Vector3(0, 0, zs * (face - 0.02)), brass, Vector3(90, 0, 0))
+					GB.sphere(v, 0.028, Vector3(0, 0, zs * (face + 0.012)), brass)
 				Mech.add_attach(r, Vector3(0.028, 0.0, zs * (face + 0.012)), "knob_rim")
 			latch_release = 1.0
 			handle = r
@@ -298,6 +301,33 @@ func _blocked_open(sgn: float) -> int:
 	return n
 
 
+## Characters (group "door_blocker", meta "block_radius") the swinging slab would hit.
+func _sweeps_into_someone(q0: float, q1: float) -> bool:
+	if absf(q1 - q0) < 1e-6 or not is_inside_tree():
+		return false
+	var inv := global_transform.affine_inverse()
+	for c in get_tree().get_nodes_in_group("door_blocker"):
+		var n3 := c as Node3D
+		if n3 == null or n3.global_position.distance_squared_to(global_position) > (width + 0.6) * (width + 0.6):
+			continue
+		var pl := inv * n3.global_position
+		if pl.y < -0.1 or pl.y > height:
+			continue
+		var r := float(n3.get_meta("block_radius", 0.06)) + thickness * 0.5
+		var d0 := _slab_dist(pl, q0)
+		var d1 := _slab_dist(pl, q1)
+		if d1 < r and d1 < d0:
+			return true
+	return false
+
+
+func _slab_dist(pl: Vector3, a: float) -> float:
+	var d := Vector2(cos(a), -sin(a))
+	var p := Vector2(pl.x, pl.z)
+	var t := clampf(p.dot(d), 0.0, width)
+	return (p - d * t).length()
+
+
 func _travel() -> float:
 	return width * 0.9
 
@@ -348,6 +378,25 @@ func elf_push(from_pos: Vector3, force := Mech.ELF_PUSH) -> void:
 	apply_point_force(cp, -n * side * force)
 
 
+## E on an unlatched door: lean on it. If it opens TOWARD the elf (the frame stop is on the far
+## side), pushing does nothing, so the elf hooks its fingers under the bottom of the leading edge
+## (the ~1 cm undercut gap) and pulls instead: same traction-limited force, toward itself.
+func _elf_lean_tick(from_pos: Vector3) -> void:
+	if is_slider() or swing_both:
+		elf_push(from_pos)
+		return
+	var cp := slab_point(from_pos)
+	var n := _slab.global_basis.z.normalized()
+	var side := signf((from_pos - cp).dot(n))
+	var f := -n * side * Mech.ELF_PUSH
+	var tau := (cp - global_position).cross(f).y
+	if absf(q) < 0.05 and signf(tau) != signf(swing_sign) and swing_sign != 0.0:
+		var edge := _slab.to_global(Vector3(width - 0.03, 0.015, 0.0))
+		apply_point_force(edge, -f)
+	else:
+		apply_point_force(cp, f)
+
+
 ## The elf leaning / hanging on something for a while (E in play): timed loads re-applied each tick.
 var _loads: Array = []  ## [{kind: "push"/"hang", from: Vector3, t: float}]
 
@@ -381,7 +430,7 @@ func _apply_loads(delta: float) -> void:
 			_loads.remove_at(i)
 			continue
 		if ld.kind == "push":
-			elf_push(ld.from)
+			_elf_lean_tick(ld.from)
 		else:
 			var h := handle if handle else flip_latch
 			if h:
@@ -446,6 +495,9 @@ func _physics_process(delta: float) -> void:
 	if nq < lo or nq > hi:
 		nq = clampf(nq, lo, hi)
 		qd *= -0.15  # door stop / frame: a dull bump
+	if not is_slider() and _sweeps_into_someone(q, nq):
+		nq = q  # the slab stops against the elf / a resident (a kinematic slab would run through them)
+		qd = 0.0
 	# the bevelled latch snaps into the strike when it swings shut
 	if _has_latch() and absf(nq) < 0.004 and absf(q) >= 0.004 and not handle_released():
 		nq = 0.0

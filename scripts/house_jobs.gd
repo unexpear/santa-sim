@@ -13,6 +13,7 @@ extends Node
 ## All sizes are Santa's (a 1.8 m man), not the elf's: that's the point of the prints.
 
 const ES := preload("res://scripts/elf_size.gd")
+const PM := preload("res://scripts/mech/part_models.gd")
 const GB := preload("res://scripts/greybox.gd")
 
 @export_group("Snacks")
@@ -201,14 +202,17 @@ func _leftovers(at: Vector3, cookies: bool) -> void:
 	root.position = at
 	interior.add_child(root)
 	if cookies:
-		GB.cylinder(root, 0.11, 0.1, 0.012, Vector3(0, 0.006, 0), Color(0.95, 0.95, 0.92))
-		var rng := RandomNumberGenerator.new()
-		rng.seed = 77
-		for k in 14:
-			GB.sphere(root, rng.randf_range(0.004, 0.009), Vector3(rng.randf_range(-0.07, 0.07), 0.015, rng.randf_range(-0.07, 0.07)), Color(0.62, 0.4, 0.2), 0.0, Vector3(1, 0.6, 1))
-		var glass := GB.cylinder(root, 0.034, 0.03, 0.12, Vector3(0.15, 0.06, 0.02), Color(0.85, 0.92, 1.0))
-		glass.transparency = 0.55
-		GB.cylinder(root, 0.031, 0.031, 0.008, Vector3(0.15, 0.006, 0.02), Color(0.98, 0.98, 0.95))  # milk film
+		if PM.add(root, "CookiePlate", Vector3.ZERO, Vector3(0, 20, 0)) == null:
+			GB.cylinder(root, 0.11, 0.1, 0.012, Vector3(0, 0.006, 0), Color(0.95, 0.95, 0.92))
+			var rng := RandomNumberGenerator.new()
+			rng.seed = 77
+			for k in 14:
+				GB.sphere(root, rng.randf_range(0.004, 0.009), Vector3(rng.randf_range(-0.07, 0.07), 0.015, rng.randf_range(-0.07, 0.07)), Color(0.62, 0.4, 0.2), 0.0, Vector3(1, 0.6, 1))
+		var glass := PM.add(root, "MilkGlassEmpty", Vector3(0.15, 0, 0.02))
+		if glass == null:
+			glass = GB.cylinder(root, 0.034, 0.03, 0.12, Vector3(0.15, 0.06, 0.02), Color(0.85, 0.92, 1.0))
+			GB.cylinder(root, 0.031, 0.031, 0.008, Vector3(0.15, 0.006, 0.02), Color(0.98, 0.98, 0.95))  # milk film
+		glass.transparency = 0.45
 		var note := Label3D.new()
 		note.text = "Thanks!\n- S"
 		note.font_size = 28

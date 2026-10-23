@@ -19,6 +19,9 @@ uniform float cloud_edge_softness = 0.12;
 uniform vec3 sun_dir = vec3(0.0, -1.0, 0.0);
 uniform vec3 sun_color : source_color = vec3(1.0, 0.55, 0.22);
 uniform float sun_amount = 0.0;
+uniform float twilight_glow = 0.0;  // 0 night .. 1 sun at the horizon: warm glow on the sun's side
+uniform vec3 glow_color : source_color = vec3(1.0, 0.36, 0.12);
+uniform vec3 moon_lit_dir = vec3(0.0, -1.0, 0.0);  // true direction of the sun (moon phase)
 
 float hash(vec2 p) {
 	// Sin-free hash: stable precision far from the origin (the old one stair-stepped clouds).
@@ -88,9 +91,22 @@ void sky() {
 		float sun = smoothstep(cos(0.045), cos(0.04), sdot) * sun_amount;
 		float sglow = (pow(max(sdot, 0.0), 60.0) * 0.9 + pow(max(sdot, 0.0), 6.0) * 0.35 * (1.0 - smoothstep(0.0, 0.5, h))) * sun_amount;
 		col += sun_color * sglow;
+		// twilight: a wide band of orange-red along the horizon toward the (set) sun
+		vec3 sflat = normalize(vec3(sd.x, 0.0, sd.z) + vec3(1e-5));
+		float saz = max(dot(normalize(vec3(d.x, 0.0, d.z) + vec3(1e-5)), sflat), 0.0);
+		float band = exp(-h * 7.0);
+		float tg = twilight_glow * band * (pow(saz, 2.5) * 0.85 + pow(saz, 14.0) * 0.9);
+		col = mix(col, glow_color, clamp(tg, 0.0, 0.92));
+		col += glow_color * pow(saz, 40.0) * band * twilight_glow * 0.5;
+		ccol = mix(ccol, glow_color * 1.1, clamp(tg * 0.8, 0.0, 0.9));
 		ccol = mix(ccol, sun_color * 1.2, sglow * 0.6);
 		col += moon_color * glow;
-		col = mix(col, moon_color * 1.4, moon);
+		// the real phase: shade the disc by the sun's true direction
+		vec3 o = (d - md * mdot) / sin(moon_size);
+		float oz = sqrt(max(1.0 - dot(o, o), 0.0));
+		vec3 mn = normalize(o - md * oz);
+		float lit = smoothstep(-0.08, 0.08, dot(mn, normalize(moon_lit_dir)));
+		col = mix(col, mix(moon_color * 0.07, moon_color * 1.4, lit), moon);
 		col = mix(col, ccol, c * 0.92);
 		col = mix(col, vec3(1.0, 0.85, 0.6) * 2.0, sun * (1.0 - c * 0.7));
 	}
