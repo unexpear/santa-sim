@@ -549,7 +549,7 @@ func _tick(delta: float, use_pressed: bool, use_held: bool) -> void:
 		p_text = "E: " + ("cookies and milk" if str(snear.get_meta("piece", "")) == "CookiesMilk" else "beer and a carrot")
 	var dnear := door_in_reach()
 	if dnear and p_text == "":
-		p_text = "Front door: locked (use the chimney)" if bool(dnear.get("locked")) else ("E: close door" if dnear.call("is_open") else "E: open door")
+		p_text = "Door: deadbolted" if bool(dnear.get("locked")) else ("E: lean on it (%s, %.0f kg)" % [str(dnear.get("handle_type")), float(dnear.get("mass"))] if not bool(dnear.get("latched")) else "E: hang on the %s handle (latched)" % str(dnear.get("handle_type")))
 	if Vector2(elf.global_position.x, elf.global_position.z).distance_to(Vector2(_hearth().x, _hearth().z)) < hearth_radius():
 		var probs := exit_problems()
 		if probs.is_empty():
@@ -620,9 +620,26 @@ func look_at_snack(sn: Node3D) -> void:
 		flash("The reindeer will want that", Color(1.0, 0.9, 0.65), 2.2)
 
 
+## E at a door: the elf does what a 0.5 kg elf can do - hang its weight on the handle if it has
+## climbed up to it, or lean on the slab. The door mechanism (door.gd) decides what happens.
 func use_door(dr: Node3D) -> void:
-	if not dr.call("toggle", elf.global_position):
-		flash("Locked. Elves use the chimney.", Color(1.0, 0.8, 0.5), 1.4)
+	if bool(dr.get("locked")):
+		flash("Deadbolted. Climb to the thumb-turn inside, or pick it", Color(1.0, 0.8, 0.5), 1.8)
+		return
+	var hp: Vector3 = dr.call("handle_grab_point", elf.global_position)
+	var at_handle := absf(hp.y - elf.global_position.y - ES.m(0.8)) < ES.m(0.9) and Vector2(hp.x - elf.global_position.x, hp.z - elf.global_position.z).length() < ES.m(3.0)
+	if bool(dr.get("latched")):
+		if at_handle:
+			dr.call("elf_hang", elf.global_position)
+			var kind := str(dr.get("handle_type"))
+			if kind == "knob":
+				flash("Your hands slip on the round knob. Wrap a rope round it and pull", Color(1.0, 0.85, 0.6), 2.2)
+			else:
+				flash("Hanging on the handle...", Color(0.9, 1.0, 0.8), 1.2)
+		else:
+			flash("Latched. The handle's way up there: climb to it, or rope it (%s)" % str(dr.get("handle_type")), Color(1.0, 0.85, 0.6), 2.2)
+		return
+	dr.call("elf_lean", elf.global_position)
 
 
 var _creak_t := 0.0

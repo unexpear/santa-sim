@@ -1045,9 +1045,10 @@ func wall_door_check(h: Node3D) -> void:
 			await _ram(start, mid - n * side * 1.2, 40, mult)
 			if (elf.global_position - mid).dot(n * side) < 0.0:
 				dthrough.append("%s closed, side %+d" % [dr.name, int(side)])
-		if bool(dr.get("locked")):
-			dlocked += 1
+		if bool(dr.get("locked")) or str(dr.get("handle_type")) == "slide" or float(dr.get("mass")) > 20.0:
+			dlocked += 1  # deadbolted, or too heavy for the elf alone (needs a rig: --mechcheck)
 			continue
+		dr.call("unlatch")  # pushed-to, not latched: the elf leans on it
 		# open it the way the player does (E within reach), then walk through
 		var side2 := 1.0
 		var s0 := floor_under(mid + n * 0.4 + Vector3(0, 0.1, 0))
@@ -1072,7 +1073,7 @@ func wall_door_check(h: Node3D) -> void:
 			dpass += 1
 		else:
 			dthrough.append("%s: couldn't pass once opened (angle %.0f)" % [dr.name, float(dr.get("angle"))])
-	print("[doors] %s: %d doors (%d locked street door), closed doors held: %s, opened with E and walked through: %d/%d" % [h.name, (it.get("doors") as Array).size(), dlocked, "yes" if dthrough.is_empty() else "NO", dpass, (it.get("doors") as Array).size() - dlocked])
+	print("[doors] %s: %d doors (%d locked / too heavy for the elf alone), closed doors held: %s, opened with E and walked through: %d/%d" % [h.name, (it.get("doors") as Array).size(), dlocked, "yes" if dthrough.is_empty() else "NO", dpass, (it.get("doors") as Array).size() - dlocked])
 	for t in dthrough:
 		print("[doors]   PROBLEM: " + str(t))
 	if not dthrough.is_empty():

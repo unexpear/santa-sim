@@ -995,6 +995,23 @@ func _opening_trim(a: Vector2, d: Vector2, inward: Vector2, o: Dictionary, fl: f
 		if not front:
 			start = 0.0 if roll < doors_closed_chance else (door_ajar_angle if roll < doors_closed_chance + doors_ajar_chance else dr.open_angle)
 		dr.locked = front
+		# the handle mechanism decides which tricks open it (seeded per house and room)
+		var hr := RandomNumberGenerator.new()
+		hr.seed = 7700 + _tier_rng.seed * 3 + doors.size() * 17
+		var kind := "lever"
+		var rn := str(room.get("name", "")).to_lower()
+		if front:
+			kind = "lever" if hr.randf() < 0.6 else "knob"
+		elif "bath" in rn or "toilet" in rn:
+			kind = "knob" if hr.randf() < 0.7 else "lever"
+		elif "kitchen" in rn and hr.randf() < 0.6:
+			kind = "plate"
+		else:
+			var x := hr.randf()
+			kind = "lever" if x < 0.5 else ("knob" if x < 0.8 else "slide")
+		dr.configure(kind, front)
+		if kind == "slide":
+			start = 0.0 if start < 1.0 else start
 		dr.setup(Furn.mesh_of("InteriorDoor"), w - 0.02, start, sgn)
 		dr.prefer_sign = sgn
 		dr.set_meta("door", true)
