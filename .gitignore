@@ -34,6 +34,11 @@ art/reference/hello_neighbor_keyart.png.import
 art/reference/elf_stealth_reference.png
 art/reference/elf_stealth_reference.png.import
 
+# Streamed-world tile packs (OSM-derived, ODbL, ~25 MB per few regions, ~150+ MB for the whole country).
+# Rebuild with: python tools/world/world_tiles.py build --regions ... (see WORLD-STREAMING.md)
+data/world/blocks/
+data/world/index.json
+
 # Python / OS / editor junk
 __pycache__/
 *.pyc

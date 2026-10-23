@@ -284,5 +284,6 @@ The hotbar sits at the bottom of the screen while you're the elf. Residents are 
 - **OpenStreetMap-derived data is NOT CC0.** The town files in `data/towns/*` and the raw Overpass responses in
   `tools/osm/cache/` stay under the [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/),
   Map data © OpenStreetMap contributors. Details and the required attribution are in `data/towns/ATTRIBUTION.md`.
+  The streamed Australia world in `data/world/` (see `WORLD-STREAMING.md`) is under the same ODbL terms.
 - Third-party style reference images (Hello Neighbor key art, the Prep & Landing elf still) are kept locally in
   `art/reference/` but are not in the repo, because they aren't ours to release.

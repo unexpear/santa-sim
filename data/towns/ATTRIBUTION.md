@@ -20,3 +20,11 @@ See https://www.openstreetmap.org/copyright.
 
 The houses drawn in the game are **not** OSM data. They are our own procedural, Santa-ready houses,
 placed on the real footprints (same position, orientation and size).
+
+## Streamed world (`data/world/`)
+
+`data/world/index.json` and the tile packs in `data/world/blocks/*.pack` are built from the Geofabrik
+extract of OpenStreetMap for Australia (`australia-latest.osm.pbf`, download.geofabrik.de) by
+`tools/world/world_tiles.py`. They are a Derivative Database under the same ODbL 1.0 terms as the town
+files above, and the streamed world scene shows `Map data © OpenStreetMap contributors (ODbL)` on screen.
+The packs are not committed (they are rebuilt locally); see `WORLD-STREAMING.md`.

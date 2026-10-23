@@ -6,6 +6,8 @@ orientation, sized to the footprint, with the front door facing the nearest stre
 
 Map data © OpenStreetMap contributors (ODbL). See `data/towns/ATTRIBUTION.md`.
 
+To stream **all of Australia** (Paddington becomes one area inside a seamless world), see `WORLD-STREAMING.md`.
+
 ## 1. Import an area (offline tool)
 `tools/osm/osm_import.py` uses only the Python standard library (Python 3.9+, nothing to install).
 Run it from `D:\dev\santa-sim`:
