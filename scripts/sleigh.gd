@@ -24,6 +24,11 @@ const SleighVisuals := preload("res://scripts/sleigh_visuals.gd")
 @export var max_speed := 28.0
 @export var linear_drag := 0.15
 @export var angular_drag := 3.0
+@export var bank_max_deg := 22.0  ## Rolls into turns (needs speed, like a real sled on rails of air).
+@export var bank_strength := 4.0
+@export var side_grip := 1.6  ## Air grip: sideways slip is turned into the heading (the team pulls it round).
+@export var wind_strength := 0.9  ## Gust acceleration (m/s^2) at altitude; 0 = calm. Scripted checks turn it off.
+@export var wind_shelter_height := 4.0  ## Gusts fade out this close above the roofs (the houses shelter you).
 
 @export_group("Landing")
 @export var crash_vertical_speed := 6.0
@@ -36,6 +41,10 @@ const SleighVisuals := preload("res://scripts/sleigh_visuals.gd")
 @export var flip_tilt_deg := 65.0
 @export var min_air_time := 0.35  ## Airborne this long before a new touchdown is scored.
 @export var reset_delay := 1.6
+## Light bump vs hard crash: between this vertical speed and crash_vertical_speed the runners bounce
+## (scaled by the roof's bounce: corrugated iron rings and bounces more than tiles) and you keep 1 star.
+@export var bump_vertical_speed := 3.0
+@export var bump_bounce := 0.35  ## fraction of the impact speed handed back as a bounce (x roof bounce)
 
 # Read by HUD / main
 var controls_enabled := true  ## Off while the elf is inside a house (sleigh parked).
@@ -54,6 +63,12 @@ var _pending := false
 var _pending_xform := Transform3D()
 var _pending_vel := Vector3.ZERO
 var _pending_is_reset := false
+var _wind := Vector3.ZERO
+var _wind_t := 0.0
+var _wind_seed := 0.0
+var wind_now := Vector3.ZERO  ## read by HUD / visuals
+var _bump := Vector3.ZERO  ## pending bounce impulse (applied next physics step)
+var _roof_height_hint := 4.0  ## main sets this to the town's roof height (wind shelter)
 var _carry_local := Transform3D(Basis(), Vector3(-0.4, 0.06, 1.0))  # on the rear compartment floor
 var _set_down_local := Transform3D(Basis(), Vector3(0.0, -0.44, 2.4))
 
@@ -79,6 +94,9 @@ func _ready() -> void:
 	_add_shape(Vector3(1.5, 0.7, 2.6), Vector3(0, 0.0, 0.1))
 	_build_visual()
 	_start_xform = global_transform
+	_wind_seed = randf() * TAU
+	if not OS.get_cmdline_user_args().is_empty():
+		wind_strength = 0.0  # scripted checks: calm air, repeatable landings
 
 
 func _add_shape(size: Vector3, pos: Vector3) -> void:
@@ -195,6 +213,9 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 
 	if is_crashed:
 		return
+	if _bump != Vector3.ZERO:
+		state.apply_central_impulse(_bump * mass)
+		_bump = Vector3.ZERO
 	_apply_controls(state, b, v)
 
 
@@ -218,12 +239,30 @@ func _apply_controls(state: PhysicsDirectBodyState3D, b: Basis, v: Vector3) -> v
 	var speed := v.length()
 	if speed > max_speed:
 		accel += -v / speed * (speed - max_speed) * 4.0
+	var hspeed := Vector2(v.x, v.z).length()
+	var up_target := Vector3.UP
+	if not grounded:
+		# air grip: sideways slip bleeds into the heading, so turns carve instead of drifting
+		var side_v := b.x.dot(v)
+		accel += -b.x * side_v * side_grip
+		# wind: slow, smooth gusts (two drifting sines per axis), sheltered near the roofs
+		_wind_t += state.step
+		var g := Vector3(sin(_wind_t * 0.31 + _wind_seed) + 0.6 * sin(_wind_t * 0.83 + 1.7 + _wind_seed),
+				0.25 * sin(_wind_t * 0.57 + 0.4), cos(_wind_t * 0.23 + 2.1 + _wind_seed) + 0.5 * sin(_wind_t * 1.1))
+		var shelter := clampf((state.transform.origin.y - _roof_height_hint) / maxf(wind_shelter_height, 0.1), 0.0, 1.0)
+		_wind = g * wind_strength * shelter
+		accel += _wind
+		# bank into turns (more with speed); also roll a little with the slip
+		var bank := deg_to_rad(bank_max_deg) * clampf(yaw, -1.0, 1.0) * clampf(hspeed / 10.0, 0.0, 1.0)
+		up_target = Vector3.UP.rotated(-b.z.normalized(), bank)
+	wind_now = _wind
 	state.apply_central_force(accel * mass)
 
 	var torque := Vector3.UP * yaw * yaw_torque
 	torque += b.x * -pitch * pitch_torque
 	if not grounded:
-		torque += b.y.cross(Vector3.UP) * upright_strength
+		torque += b.y.cross(up_target) * upright_strength
+		torque += b.y.cross(up_target).project(b.z) * bank_strength
 	state.apply_torque(torque * mass)
 
 
@@ -253,6 +292,12 @@ func _evaluate_touchdown(surface: Node) -> void:
 		_emit_touchdown(r)
 		_fail(r.reason)
 		return
+	if vs > bump_vertical_speed:
+		# a light bump: the runners bounce off the roof (iron more than tiles) and you keep going
+		var rb := float(surface.get_meta("roof_bounce", 0.5))
+		_bump = Vector3.UP * vs * bump_bounce * rb
+		r["bump"] = true
+		r.reason = "Bump!"
 	if vs < three_star.x and hs < three_star.y and tilt_deg < three_star.z:
 		r.stars = 3
 	elif vs < two_star.x and hs < two_star.y and tilt_deg < two_star.z:

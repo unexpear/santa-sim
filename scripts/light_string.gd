@@ -138,6 +138,8 @@ func setup(points: PackedVector3Array, color: Color, chase := false, energy := 1
 	m.set_shader_parameter("max_distance_scale", max_distance_scale)
 	material_override = m
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_energy = energy
+	add_to_group("night_lit")  # night_clock.gd: bulbs come on at dusk
 
 	# Wire: short tubes between successive wire points.
 	var tube := CylinderMesh.new()
@@ -187,3 +189,13 @@ func setup(points: PackedVector3Array, color: Color, chase := false, energy := 1
 					add_child(l)
 					break
 				run += seg
+
+
+var _energy := 1.8
+
+
+## night_clock.gd: 0 = switched off (daylight) .. 1 = full night glow.
+func set_night_level(f: float) -> void:
+	var m := material_override as ShaderMaterial
+	if m:
+		m.set_shader_parameter("energy", _energy * clampf(f, 0.0, 1.0) + 0.02)

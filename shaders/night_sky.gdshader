@@ -15,6 +15,10 @@ uniform float cloud_coverage = 0.42;
 uniform float cloud_speed = 0.006;
 uniform float star_amount = 0.35;
 uniform float cloud_edge_softness = 0.12;
+// night_clock.gd: the low sun at sunset / sunrise (0 = below the horizon)
+uniform vec3 sun_dir = vec3(0.0, -1.0, 0.0);
+uniform vec3 sun_color : source_color = vec3(1.0, 0.55, 0.22);
+uniform float sun_amount = 0.0;
 
 float hash(vec2 p) {
 	// Sin-free hash: stable precision far from the origin (the old one stair-stepped clouds).
@@ -78,9 +82,17 @@ void sky() {
 		vec3 ccol = mix(cloud_lit_color, cloud_color, inner * 0.7 + smoothstep(0.05, 0.4, h) * 0.3);
 		ccol += moon_color * glow * 1.5;
 
+		// low sun: a soft disc and a wide warm glow along the horizon on its side of the sky
+		vec3 sd = normalize(sun_dir);
+		float sdot = dot(d, sd);
+		float sun = smoothstep(cos(0.045), cos(0.04), sdot) * sun_amount;
+		float sglow = (pow(max(sdot, 0.0), 60.0) * 0.9 + pow(max(sdot, 0.0), 6.0) * 0.35 * (1.0 - smoothstep(0.0, 0.5, h))) * sun_amount;
+		col += sun_color * sglow;
+		ccol = mix(ccol, sun_color * 1.2, sglow * 0.6);
 		col += moon_color * glow;
 		col = mix(col, moon_color * 1.4, moon);
 		col = mix(col, ccol, c * 0.92);
+		col = mix(col, vec3(1.0, 0.85, 0.6) * 2.0, sun * (1.0 - c * 0.7));
 	}
 	COLOR = col;
 }

@@ -459,14 +459,15 @@ func _tween_damper(h: Node3D, a: float, b: float, t: float) -> void:
 
 func _goggles(on: bool) -> void:
 	if on and _gog_beam == null:
+		# a soft night-vision glow round the elf (no hard-edged spotlight pool on the bricks): a
+		# wide, dim, pale-green wash that fades out with distance
 		_gog_beam = SpotLight3D.new()
-		# a soft, small green pool from the goggles (not a floodlight)
-		_gog_beam.light_color = Color(0.55, 1.0, 0.5)
-		_gog_beam.light_energy = 0.9
-		_gog_beam.spot_range = 0.75
-		_gog_beam.spot_angle = 24.0
-		_gog_beam.spot_angle_attenuation = 2.2
-		_gog_beam.spot_attenuation = 1.6
+		_gog_beam.light_color = Color(0.72, 1.0, 0.78)
+		_gog_beam.light_energy = 0.35
+		_gog_beam.spot_range = ES.m(4.0)
+		_gog_beam.spot_angle = 70.0
+		_gog_beam.spot_angle_attenuation = 0.35
+		_gog_beam.spot_attenuation = 2.4
 		_gog_beam.shadow_enabled = false
 		var head: Node3D = elf.get("head")
 		(head if head else elf).add_child(_gog_beam)
@@ -475,7 +476,8 @@ func _goggles(on: bool) -> void:
 		_gog_beam.visible = on
 	var gl: OmniLight3D = elf.get("goggle_light")
 	if gl:
-		gl.light_energy = 0.2 if on else float(elf.get("goggle_light_energy"))
+		gl.light_color = Color(0.72, 1.0, 0.78) if on else Color(0.4, 1.0, 0.35)
+		gl.light_energy = 0.12 if on else float(elf.get("goggle_light_energy"))
 		gl.omni_range = ES.m(1.6) if on else ES.m(float(elf.get("goggle_light_range_eh")))
 
 
@@ -637,12 +639,13 @@ func _make_hook(at: Vector3, into := Vector3.FORWARD) -> void:
 	GB.cylinder(_hook, 0.025, 0.02, 0.06, Vector3(0, 0.04, 0.085), white)
 	_line = MeshInstance3D.new()
 	var cm := CylinderMesh.new()
-	cm.top_radius = ES.m(0.02)
-	cm.bottom_radius = ES.m(0.02)
+	cm.top_radius = ES.m(0.015)  # 3.3 mm tactical cord
+	cm.bottom_radius = ES.m(0.015)
 	cm.height = 1.0
 	cm.radial_segments = 6
 	_line.mesh = cm
-	_line.material_override = GB.mat(Color(0.95, 0.9, 0.85), 0.2)
+	_line.material_override = GB.mat(Color(0.2, 0.22, 0.16), 0.0, 0.1)  # olive-drab kernmantle (no glow)
+	_line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	(main as Node3D).add_child(_line)
 	for n in _hook.find_children("*", "VisualInstance3D", true, false):
 		(n as VisualInstance3D).layers = 3

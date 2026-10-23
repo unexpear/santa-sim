@@ -86,7 +86,8 @@ void fragment() {
 	float streak_x = floor(w.x * 30.0);
 	float streak = step(0.8, hash(vec2(streak_x, 4.2))) * smoothstep(0.0, 0.6, vnoise(vec2(streak_x, w.y * 2.5)));
 	float topness = 1.0 - clamp((glow_bottom_y + glow_reach * 1.6 - wp.y) / max(glow_reach * 1.6, 0.01), 0.0, 1.0);
-	float soot = clamp(0.55 + 0.4 * topness + blotch - 0.2 + depth * 0.1, 0.0, 0.97) * soot_max / 0.82;
+	float soot = clamp(0.3 + 0.35 * topness + blotch - 0.15 + depth * 0.1, 0.0, 0.92) * soot_max / 0.82;
+	soot *= mix(1.0, 0.55, smoothstep(-0.001, 0.004, e) * (1.0 - mortar));  // brick faces shed soot, the recessed joints hold it
 	soot = max(soot, streak * 0.95);
 	col = mix(col, soot_color.rgb, soot);
 	ALBEDO = col;

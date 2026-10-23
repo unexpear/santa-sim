@@ -35,6 +35,13 @@ var stills_mode := false  ## scripted checks hide the sleigh HUD in stills
 var world_env: Environment
 var atmosphere: Node3D  ## fog + outdoor particles (scripts/atmosphere.gd)
 var mission: Node  ## chimney entry + elf + gadgets (scripts/chimney_entry.gd)
+const NightClock := preload("res://scripts/night_clock.gd")
+const ClockHud := preload("res://scripts/clock_hud.gd")
+var night_clock: Node  ## shared environment director (group "night_clock")
+var _sky_mat: ShaderMaterial
+var _moon_light: DirectionalLight3D
+var _fill_light: DirectionalLight3D
+var _rim_light: DirectionalLight3D
 
 
 func _enter_tree() -> void:
@@ -66,6 +73,7 @@ func _ready() -> void:
 	atmosphere.name = "Atmosphere"
 	add_child(atmosphere)
 	atmosphere.call("setup", world_env, get_node_or_null("Suburb"), sleigh, team, [$HouseFlat, $HouseSteep, $HouseSlick])
+	_setup_night()
 	camera.call("snap")
 	hud.call("flash", "Land on the lit rooftops!  Green = safe   Blue = slick   Red = danger", Color(1, 0.95, 0.8), 5.0)
 	for a in OS.get_cmdline_user_args():
@@ -87,6 +95,12 @@ func _ready() -> void:
 		elif a.begins_with("--firevis="):
 			_checks = Checks.new()
 			_checks.call("fire_vis", self, a.get_slice("=", 1))
+		elif a.begins_with("--nightshots="):
+			_checks = Checks.new()
+			_checks.call("night_shots", self, a.get_slice("=", 1))
+		elif a.begins_with("--chimtop="):
+			_checks = Checks.new()
+			_checks.call("chim_top", self, a.get_slice("=", 1))
 		elif a.begins_with("--flueprobe="):
 			_checks = Checks.new()
 			_checks.call("flue_probe", self, a.get_slice("=", 1))
@@ -165,6 +179,8 @@ func _setup_input() -> void:
 	_bind("rope_zip", [KEY_B], [], [JOY_BUTTON_DPAD_DOWN])  # zipline: anchor A, anchor B, ride
 	_bind("rope_retrieve", [KEY_H], [], [JOY_BUTTON_BACK])  # reel a zipline back in
 	_bind("nightvision", [KEY_N], [], [JOY_BUTTON_DPAD_UP])
+	_bind("soot_boots", [KEY_J], [])  # Santa's sooty boot prints on / off
+	_bind("snack_vac", [KEY_K], [])  # hold: Snack-Vac (silent, from the floor)
 	_bind("gadget_use", [], [[JOY_AXIS_TRIGGER_RIGHT, 1.0]], [], [MOUSE_BUTTON_LEFT])
 	_bind("magnet", [KEY_G], [], [JOY_BUTTON_B], [MOUSE_BUTTON_RIGHT])
 	_bind("gadget_next", [KEY_E], [], [JOY_BUTTON_RIGHT_SHOULDER], [MOUSE_BUTTON_WHEEL_DOWN])
@@ -314,6 +330,37 @@ func _on_sleigh_reset() -> void:
 	camera.call("snap")
 
 
+## The night clock: sunset to sunrise over PER_HOUSE_SECONDS x 3 x delivery houses. Scripted
+## checks freeze it at 11 pm (the art-directed full night) unless they drive it themselves.
+func _setup_night() -> void:
+	night_clock = NightClock.new()
+	night_clock.name = "NightClock"
+	add_child(night_clock)
+	night_clock.call("bind", world_env, _sky_mat, _moon_light, _fill_light, _rim_light)
+	var roots: Array = [$HouseFlat, $HouseSteep, $HouseSlick]
+	if get_node_or_null("Suburb"):
+		roots.append(get_node("Suburb"))
+	var lights := []
+	for r in roots:
+		lights.append_array((r as Node).find_children("*", "Light3D", true, false))
+	night_clock.call("collect_list", lights)
+	night_clock.call("start_run", roots.size() - (1 if get_node_or_null("Suburb") else 0))
+	var hud2 := ClockHud.new()
+	hud2.name = "ClockHud"
+	add_child(hud2)
+	if not OS.get_cmdline_user_args().is_empty():
+		night_clock.set("running", false)
+		night_clock.call("set_hour", 23.0)
+
+
+func _house_under_sleigh() -> Node3D:
+	for h in [$HouseFlat, $HouseSteep, $HouseSlick]:
+		var lp: Vector3 = (h as Node3D).to_local(sleigh.global_position)
+		if absf(lp.x) < float(h.get("width")) * 0.5 + 1.0 and absf(lp.z) < float(h.get("depth")) * 0.5 + 1.0:
+			return h
+	return null
+
+
 func _on_touchdown(r: Dictionary) -> void:
 	var detail := "(vert %.1f, horiz %.1f m/s, tilt %.0f°)" % [r.vs, r.hs, r.tilt]
 	print("[landing] %s %s stars=%d crash=%s %s" % [r.surface, detail, r.stars, r.crash, r.reason])
@@ -325,12 +372,19 @@ func _on_touchdown(r: Dictionary) -> void:
 	var stars := STAR.repeat(int(r.stars)) + NO_STAR.repeat(3 - int(r.stars))
 	last_landing = "%s  %s %s" % [stars, r.surface, detail]
 	var words: Array[String] = ["", "Rough landing", "Nice landing!", "PERFECT LANDING!"]
-	hud.call("flash", "%s  %s" % [stars, words[int(r.stars)]], Color(1, 0.9, 0.3), 3.0)
+	hud.call("flash", "%s  %s%s" % [stars, "BUMP!  " if r.get("bump", false) else "", words[int(r.stars)]], Color(1, 0.9, 0.3), 3.0)
+	# a heavy landing thumps through the roof: the residents of that house stir (resident_events.gd)
+	var h := _house_under_sleigh()
+	if h and h.has_method("roof_noise"):
+		h.call("roof_noise", sleigh.global_position, float(r.vs))
 
 
 func _on_crashed(reason: String) -> void:
 	print("[crash] %s" % reason)
 	hud.call("flash", "CRASH!  %s" % reason, Color(1, 0.3, 0.25), 2.5)
+	var h := _house_under_sleigh()
+	if h and h.has_method("roof_noise"):
+		h.call("roof_noise", sleigh.global_position, 9.0)  # a crash on the roof wakes the house
 
 
 # --- world -----------------------------------------------------------------------------------------
@@ -360,6 +414,7 @@ func _build_world() -> void:
 	sky_mat.set_shader_parameter("moon_dir", moon_dir)
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
+	_sky_mat = sky_mat
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
@@ -415,6 +470,7 @@ func _build_world() -> void:
 	# moonbeams still fall through the windows, but the shadow cascades skip thousands of props
 	moon.shadow_caster_mask = 0xFFFFF & ~2
 	add_child(moon)
+	_moon_light = moon
 	moon.look_at_from_position(Vector3.ZERO, Vector3(0.55, -0.62, -0.55), Vector3.UP)
 	# Warm amber fill from the other side (no shadows) keeps shadowed faces warm, never murky.
 	var fill := DirectionalLight3D.new()
@@ -422,6 +478,7 @@ func _build_world() -> void:
 	fill.light_energy = warm_fill_energy
 	fill.light_cull_mask = 0xFFFFF & ~2  # interiors (visual layer 2) get their own lamps + moonbeams
 	add_child(fill)
+	_fill_light = fill
 	fill.look_at_from_position(Vector3.ZERO, Vector3(-0.7, -0.3, -0.35), Vector3.UP)
 	# Rim/back light from the glowing horizon so silhouettes pop against the sky.
 	var rim := DirectionalLight3D.new()
@@ -429,6 +486,7 @@ func _build_world() -> void:
 	rim.light_energy = rim_light_energy
 	rim.light_cull_mask = 0xFFFFF & ~2
 	add_child(rim)
+	_rim_light = rim
 	rim.look_at_from_position(Vector3.ZERO, Vector3(-0.15, -0.22, 1.0), Vector3.UP)
 
 	# Ground (touching it = crash / broken present): painterly summer grass with dry patches.

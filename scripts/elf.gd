@@ -122,6 +122,27 @@ var _crouch_blend := 0.0
 var _idle_t := 0.0
 var _hips_rest := Vector3.ZERO
 var _jump_queued := false
+## Body pushback: the arms, wrist launcher, nose and ears reach past the collision capsule; when
+## they would go into a wall, door or furniture side the whole model eases back (horizontally) so
+## no mesh ever pokes through. [MeshInstance3D, PackedVector3Array (subsampled local verts)]
+var _push_pts: Array = []
+var _push_off := Vector3.ZERO
+var _model_rest := Vector3.ZERO
+@export var pushback_margin_eh := 0.03  ## gap kept between the mesh and a surface, eh (6.6 mm)
+@export var pushback_max_eh := 0.45  ## the model never slides further than this from the capsule, eh
+## Falls and landings (elf physics): coyote time / jump buffer, a squash on landing that scales
+## with the fall, a short stagger after big drops and a thud the residents can hear.
+@export var coyote_time := 0.1
+@export var jump_buffer := 0.12
+@export var land_noise_eh_per_ms := 5.0  ## landing thud radius, eh per m/s of impact (a 0.5 m drop ~ 3.1 m/s -> 15 eh = 3.4 m)
+@export var hard_land_speed_eh := 14.0  ## eh/s (3.1 m/s, about a 0.5 m drop): stagger + louder thud
+var _air_t := 0.0
+var _jump_buf := 0.0
+var _fall_v := 0.0
+var _squash := 0.0
+var _stagger := 0.0
+var land_noise := 0.0  ## metres, decays; read by noise_radius()
+signal landed(speed: float)
 
 
 func walk_speed() -> float:
@@ -132,6 +153,8 @@ func noise_radius() -> float:
 	if ext_control:
 		return ext_noise
 	var hv := Vector2(velocity.x, velocity.z).length()
+	if land_noise > 0.0:
+		return maxf(land_noise, 0.0 if (hidden or hv < 0.05) else ES.m(noise_radius_sneak_eh if crouched else (noise_radius_crouch_eh if tac_crouched else noise_radius_walk_eh)))
 	if hidden or hv < 0.05:
 		return 0.0
 	return ES.m(noise_radius_sneak_eh if crouched else (noise_radius_crouch_eh if tac_crouched else noise_radius_walk_eh))
@@ -203,6 +226,17 @@ func _ready() -> void:
 			for k in range(0, v.size(), 3):
 				few.append(v[k])
 			_ear_pts.append([mi, few])
+	_model_rest = model.position
+	for n in model.find_children("*", "MeshInstance3D", true, false):
+		var pm := n as MeshInstance3D
+		if pm.mesh == null or pm.mesh.get_surface_count() == 0:
+			continue
+		var pv: PackedVector3Array = pm.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		var few2 := PackedVector3Array()
+		var stepv := maxi(1, pv.size() / 60)
+		for k in range(0, pv.size(), stepv):
+			few2.append(pv[k])
+		_push_pts.append([pm, few2])
 	arm_l = model.find_child("ArmL", true, false) as Node3D
 	arm_r = model.find_child("ArmR", true, false) as Node3D
 	leg_l = model.find_child("LegL", true, false) as Node3D
@@ -415,19 +449,41 @@ func _physics_process(delta: float) -> void:
 		want = Vector3.ZERO
 		velocity.x = 0.0
 		velocity.z = 0.0
-	var acc := ES.m(accel_eh) * accel_mult * delta
+	if _stagger > 0.0:
+		_stagger -= delta
+		want *= 0.35  # winded after a big drop
+	var on_floor := is_on_floor()
+	# in the air you keep most of your momentum (only a little air control)
+	var acc := ES.m(accel_eh) * accel_mult * delta * (1.0 if on_floor else 0.3)
 	velocity.x = move_toward(velocity.x, want.x, acc)
 	velocity.z = move_toward(velocity.z, want.z, acc)
-	if not is_on_floor():
+	if _jump_queued:
+		_jump_buf = jump_buffer
+	_jump_queued = false
+	_jump_buf = maxf(0.0, _jump_buf - delta)
+	if on_floor:
+		_air_t = 0.0
+	else:
+		_air_t += delta
+	var can_jump := on_floor or _air_t < coyote_time
+	if not on_floor:
 		velocity.y -= gravity * delta
+		_fall_v = maxf(_fall_v, -velocity.y)
 	else:
 		velocity.y = maxf(velocity.y, -0.5)
-		if _jump_queued and jump_override.is_valid() and bool(jump_override.call()):
-			_jump_queued = false
-		if _jump_queued and not crouched:
+	if _jump_buf > 0.0 and can_jump:
+		if on_floor and jump_override.is_valid() and bool(jump_override.call()):
+			_jump_buf = 0.0
+		elif not crouched and velocity.y <= 0.01:
 			velocity.y = sqrt(2.0 * gravity * ES.m(jump_height_eh))
-	_jump_queued = false
+			_jump_buf = 0.0
+			_air_t = coyote_time
+	var was_air := not on_floor
 	move_and_slide()
+	land_noise = maxf(0.0, land_noise - delta * ES.m(20.0))
+	if was_air and is_on_floor():
+		_on_landed(_fall_v)
+		_fall_v = 0.0
 	# lean / peek: only while (nearly) still on the floor
 	if Vector2(velocity.x, velocity.z).length() > walk_speed() * 0.6 or not is_on_floor():
 		lean_want = 0.0
@@ -540,6 +596,82 @@ func _animate(delta: float, speed: float) -> void:
 	_fit_hat(delta, 0.8 * c)
 	_update_hat_shape()
 	_update_head_shape(delta)
+	_body_pushback(delta)
+	# landing squash (feet stay planted: scale about the model origin at the feet)
+	_squash = move_toward(_squash, 0.0, delta * 3.5)
+	var sq := _squash * 0.22
+	model.scale = Vector3.ONE * (HEIGHT / ES.MODEL_HEIGHT) * Vector3(1.0 + sq * 0.6, 1.0 - sq, 1.0 + sq * 0.6)
+
+
+## Touchdown after a fall: squash proportional to impact, a thud (noise) the residents hear,
+## and a short stagger after a big drop. Tiny step-downs are silent.
+func _on_landed(v: float) -> void:
+	if v < ES.m(4.0):  # step-downs and rug edges: silent
+		return
+	var hard := ES.m(hard_land_speed_eh)
+	_squash = clampf(v / hard, 0.15, 1.0)
+	land_noise = ES.m(v * land_noise_eh_per_ms * (0.5 if (crouched or tac_crouched) else 1.0))
+	if v > hard:
+		_stagger = 0.35
+	landed.emit(v)
+
+
+## Ease the whole model back from any wall, door or furniture side its reaching parts would
+## enter: the farthest sampled vertices in 8 directions x 4 height bands each cast a ray out from
+## the elf's middle; any overlap (plus a small margin) becomes a horizontal shove back.
+func _body_pushback(delta: float) -> void:
+	if model == null or not is_inside_tree():
+		return
+	if puppet or ext_control or _push_pts.is_empty():
+		_push_off = _push_off.lerp(Vector3.ZERO, 1.0 - exp(-10.0 * delta))
+		model.position = _model_rest + _push_off
+		return
+	var c := global_position
+	var best := {}
+	for e in _push_pts:
+		var mi: MeshInstance3D = e[0]
+		if not mi.is_visible_in_tree():
+			continue
+		var xf := mi.global_transform
+		for v: Vector3 in e[1]:
+			var w: Vector3 = xf * v - _push_off
+			var hv := Vector3(w.x - c.x, 0, w.z - c.z)
+			var d := hv.length()
+			if d < ES.radius() * 0.8:
+				continue
+			var key := (int((atan2(hv.z, hv.x) + PI) / TAU * 8.0) % 8) * 4 + clampi(int((w.y - c.y) / ES.m(0.3)), 0, 3)
+			if not best.has(key) or float(best[key][0]) < d:
+				best[key] = [d, w]
+	var space := get_world_3d().direct_space_state
+	var push := Vector3.ZERO
+	var margin := ES.m(pushback_margin_eh)
+	for key in best:
+		var d: float = best[key][0]
+		var w: Vector3 = best[key][1]
+		var dir := Vector3(w.x - c.x, 0, w.z - c.z) / d
+		var from := Vector3(c.x, w.y, c.z)
+		var q := PhysicsRayQueryParameters3D.create(from, from + dir * (d + margin), collision_mask)
+		q.exclude = [get_rid()]
+		var hit := space.intersect_ray(q)
+		if hit.is_empty():
+			continue
+		var over := d + margin - from.distance_to(hit.position)
+		if over <= 0.0:
+			continue
+		var n: Vector3 = hit.normal
+		n.y = 0
+		n = n.normalized() if n.length() > 0.1 else -dir
+		# shove along the surface normal; add only what isn't already covered
+		var have := push.dot(n)
+		var need := over / maxf(absf(n.dot(dir)), 0.35)
+		if need > have:
+			push += n * (need - have)
+	push = push.limit_length(ES.m(pushback_max_eh))
+	if push.length() >= _push_off.length():
+		_push_off = push  # never lag into a wall
+	else:
+		_push_off = _push_off.lerp(push, 1.0 - exp(-8.0 * delta))
+	model.position = _model_rest + _push_off
 
 
 func _update_head_shape(delta: float) -> void:

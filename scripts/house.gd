@@ -207,6 +207,14 @@ func _static_box(size: Vector3, xform: Transform3D, color: Color, friction: floa
 	if group != "":
 		body.add_to_group(group)
 	body.set_meta("surface_name", surface_name if surface_name != "" else "House")
+	# how springy the roof is for a sleigh bump (sleigh.gd): corrugated iron rings and bounces,
+	# terracotta tiles and the membrane pad soak it up
+	var bounce := 0.5
+	if surface_name.contains("slick"):
+		bounce = 1.0  # wet corrugated iron
+	elif surface_name.contains("Steep") or surface_name.contains("Ridge"):
+		bounce = 0.3  # tiles
+	body.set_meta("roof_bounce", bounce)
 	add_child(body)
 	return body
 
@@ -596,16 +604,16 @@ func _build_flue_shaft() -> void:
 	var full := mouth_y - to_global(Vector3(0, throat_y, 0)).y
 	_shaft_mat = ShaderMaterial.new()
 	_shaft_mat.shader = ChimneyModel.FLUE_SHADER
-	_shaft_mat.set_shader_parameter("mode", 1)
+	_shaft_mat.set_shader_parameter("mode", 0)  # brick-lined flue: real bricks read better than a plain clay tube
 	var brick_mat := ShaderMaterial.new()
 	brick_mat.shader = ChimneyModel.FLUE_SHADER
 	_chamber_mat = brick_mat
 	var cmf: ShaderMaterial = chimney_model.get("flue_mat") as ShaderMaterial
-	cmf.set_shader_parameter("mode", 1)
+	cmf.set_shader_parameter("mode", 0)
 	for m: ShaderMaterial in [_shaft_mat, cmf, brick_mat]:
 		m.set_shader_parameter("soot_top_y", mouth_y)
 		m.set_shader_parameter("soot_depth", maxf(1.0, full * 0.55))
-		m.set_shader_parameter("soot_max", 0.82)
+		m.set_shader_parameter("soot_max", 0.62)  # sooty, but the brick and mortar still read
 		m.set_shader_parameter("glow_bottom_y", to_global(Vector3(0, throat_y - 0.25, 0)).y)
 		m.set_shader_parameter("glow_reach", 2.6)
 	# the liner: an inward-facing square tube
@@ -696,6 +704,7 @@ func _build_flue_shaft() -> void:
 	dust.position = Vector3(lc.x, (kink_y + top) * 0.5, lc.z)
 	add_child(dust)
 	_shaft_light = OmniLight3D.new()
+	_shaft_light.add_to_group("no_night_switch")
 	_shaft_light.position = Vector3(fp.x, throat_y + 0.15, bc.z)
 	_shaft_light.omni_range = 1.4
 	_shaft_light.omni_attenuation = 1.8
@@ -747,9 +756,49 @@ func _ledge_down(st: SurfaceTool, lo: Rect2, hi: Rect2, y: float) -> void:
 
 ## Hide / show the floor and ceiling slabs the liner passes through (cutscene camera in the flue).
 func set_flue_view(on: bool) -> void:
+	_flue_view = on
 	for mi in flue_blockers:
 		if is_instance_valid(mi):
 			(mi as MeshInstance3D).visible = not on
+	if not on:
+		_set_shell_cut(false)
+
+
+## While the cutscene camera is down inside the liner, the house shell around the stack (the
+## walls box's top cap, roof slabs, fascia, the roofline light strings) is hidden: the liner hides
+## it anyway, and its faces at roof height otherwise cut across the flue as a flat coloured slab
+## right in front of the camera (the "orange / purple bar" at the top of the descent).
+var _flue_view := false
+var _shell_cut := false
+var _shell_nodes: Array = []
+
+
+func _set_shell_cut(on: bool) -> void:
+	if on == _shell_cut:
+		return
+	_shell_cut = on
+	if on and _shell_nodes.is_empty():
+		var fs := flue_size * 0.5 + 0.9
+		var top := get_chimney_mouth_world().y
+		var col := AABB(to_global(Vector3(chimney_base.x - fs, 0, chimney_base.z - fs)), Vector3(fs * 2.0, 0, fs * 2.0))
+		col.position.y = to_global(Vector3(0, wall_height - 0.7, 0)).y
+		col.size.y = top - col.position.y
+		var keep := [interior, chimney_model, damper_hinge]
+		for c in get_children():
+			if c in keep or str(c.name) in ["FlueLiner", "SmokeChamber"]:
+				continue
+			var vis: Array = c.find_children("*", "GeometryInstance3D", true, false)
+			if c is GeometryInstance3D:
+				vis.append(c)
+			for g: GeometryInstance3D in vis:
+				if not g.visible:
+					continue
+				var bb := g.global_transform * g.get_aabb()
+				if bb.intersects(col) and bb.end.y > col.position.y:
+					_shell_nodes.append(g)
+	for g in _shell_nodes:
+		if is_instance_valid(g):
+			(g as GeometryInstance3D).visible = not on
 
 
 ## Colours of the flue (bottom glow, chimney-top glow, frost) for the fire state.
@@ -940,6 +989,7 @@ func _build_fire() -> void:
 		fire.add_child(hz)
 		_fire_nodes.append(hz)
 	_fire_light = OmniLight3D.new()
+	_fire_light.add_to_group("no_night_switch")
 	_fire_light.light_color = Color(1.0, 0.55, 0.2)
 	_fire_light.light_energy = fire_light_energy
 	_fire_light.omni_range = 4.5
@@ -1029,6 +1079,12 @@ func freeze_fire() -> void:
 
 func _process(delta: float) -> void:
 	_t += delta
+	if _flue_view:
+		var cam := get_viewport().get_camera_3d()
+		if cam:
+			var lp := to_local(cam.global_position)
+			var inside := lp.y < to_local(get_chimney_mouth_world()).y - 0.06 and Vector2(lp.x - chimney_base.x, lp.z - chimney_base.z).length() < flue_size
+			_set_shell_cut(inside)
 	if _fire_light and fire_lit:
 		var fk := 0.8 + 0.12 * sin(_t * 13.0) * sin(_t * 7.3 + 1.0) + 0.08 * sin(_t * 23.0 + 2.0)
 		_fire_light.light_energy = fire_light_energy * fk

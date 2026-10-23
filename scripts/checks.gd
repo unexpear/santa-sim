@@ -2992,3 +2992,93 @@ func _vis_diag(h: Node3D) -> void:
 			var v := mi as MeshInstance3D
 			if v.is_visible_in_tree() and (v.global_transform * v.get_aabb()).grow(0.01).has_point(q):
 				print("[vis]  at %.2f: %s (%s) %s" % [d, v.get_path(), v.get_aabb().size, v.mesh.get_class() if v.mesh else "-"])
+
+
+## --chimtop=<dir>: the top half of the abseil (Mike's screenshot spot). Freezes the cutscene there,
+## saves chim_tophalf_<tag>.jpg, and finds any mesh that paints a flat orange plane or a bright
+## spike over the view by hiding each nearby mesh in turn and measuring the frame.
+func _frame_stats() -> Vector2:
+	await RenderingServer.frame_post_draw
+	var img := main.get_viewport().get_texture().get_image()
+	img.resize(160, 90, Image.INTERPOLATE_NEAREST)
+	var orange := 0
+	var bright := 0
+	for y in 90:
+		for x in 160:
+			var c := img.get_pixel(x, y)
+			if c.r > 0.55 and c.g > 0.18 and c.g < 0.5 and c.b < 0.15:
+				orange += 1
+			if c.r > 0.8 and c.g > 0.75 and c.b > 0.7:
+				bright += 1
+	return Vector2(orange, bright) / 14400.0
+
+
+func chim_top(m: Node3D, d: String) -> void:
+	_init_check(m, d)
+	var tag := "after"
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--tag="):
+			tag = a.get_slice("=", 1)
+	await _wait(2.5)
+	for hn in ["HouseFlat", "HouseSteep"]:
+		var h: Node3D = m.get_node(hn)
+		if not await land(h):
+			continue
+		clean_screen()
+		mission.call("enter", h)
+		_hide_signs(h)
+		await wait_phase("abseil")
+		var marks := [1.1, 0.8]  # seconds of cutscene before each freeze
+		for k in marks.size():
+			await _wait(float(marks[k]))
+			Engine.time_scale = 0.0
+			await _frames(3)
+			clean_screen()
+			var name := "chim_tophalf_%s_%s_%d" % [tag, hn.trim_prefix("House").to_lower(), k]
+			await grab(name)
+			var base: Vector2 = await _frame_stats()
+			var cam := main.get_viewport().get_camera_3d()
+			print("[chimtop] %s orange %.3f bright %.3f cam %s near %.3f" % [name, base.x, base.y, h.to_local(cam.global_position), cam.near])
+			var cands := []
+			for n in main.find_children("*", "GeometryInstance3D", true, false):
+				var g := n as GeometryInstance3D
+				if g.is_visible_in_tree() and (g.global_transform * g.get_aabb()).grow(0.05).has_point(cam.global_position) == false:
+					var bb := g.global_transform * g.get_aabb()
+					var cp := cam.global_position
+					var near := Vector3(clampf(cp.x, bb.position.x, bb.end.x), clampf(cp.y, bb.position.y, bb.end.y), clampf(cp.z, bb.position.z, bb.end.z))
+					if near.distance_to(cp) < 2.5:
+						cands.append(g)
+				elif g.is_visible_in_tree():
+					cands.append(g)
+			for g: GeometryInstance3D in cands:
+				g.visible = false
+				await _frames(1)
+				var s: Vector2 = await _frame_stats()
+				g.visible = true
+				if base.x - s.x > 0.03 or base.y - s.y > 0.01:
+					var mi := g as MeshInstance3D
+					print("[chimtop]  culprit %s (%s) orange %.3f->%.3f bright %.3f->%.3f aabb %s mat %s" % [g.get_path(), mi.mesh.get_class() if mi and mi.mesh else g.get_class(), base.x, s.x, base.y, s.y, g.global_transform * g.get_aabb(), (mi.material_override if mi and mi.material_override else (mi.mesh.surface_get_material(0) if mi and mi.mesh and mi.mesh.get_surface_count() > 0 else null))])
+			Engine.time_scale = 1.0
+		await wait_mode(2, 60.0)
+		await exit_house()
+	print("[check] chimtop done")
+	m.get_tree().quit()
+
+
+## --nightshots=<dir>: the night clock at sunset, midnight and sunrise from the start pad, with fps
+## (and a run-length readout for the measured per-house time).
+func night_shots(m: Node3D, d: String) -> void:
+	_init_check(m, d)
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	await _wait(2.0)
+	var clock: Node = m.get("night_clock")
+	for e in [["night_sunset", 20.0], ["night_dusk", 20.6], ["night_midnight", 0.0], ["night_predawn", 5.1], ["night_sunrise", 5.8]]:
+		clock.call("set_hour", float(e[1]))
+		await _wait(0.6)
+		var st: Dictionary = clock.call("state")
+		await grab(str(e[0]))
+		print("[night] %s: %s sun %.1f deg, lights_on %.2f, interior %.2f, %s" % [e[0], st.text, st.sun_alt_deg, st.lights_on, st.interior_dim, await fps_here(str(e[0]), 1.5)])
+	for n in [1, 3, 20, 200]:
+		print("[night] %d houses -> night %.1f min" % [n, float(clock.call("night_length_for", n)) / 60.0])
+	print("[check] nightshots done")
+	m.get_tree().quit()

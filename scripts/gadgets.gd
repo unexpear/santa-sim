@@ -18,6 +18,7 @@ const GHOST := preload("res://shaders/ghost.gdshader")
 const ES := preload("res://scripts/elf_size.gd")  ## the shared elf height: every *_eh tunable below is in elf heights
 const NV := preload("res://shaders/nightvision.gdshader")
 const RopeTech := preload("res://scripts/rope_tech.gd")
+const HouseJobs := preload("res://scripts/house_jobs.gd")
 
 @export_group("Glow-Gogs")
 @export var goggles_notice_mult := 1.25  ## Residents notice you this much faster while night vision is on.
@@ -101,6 +102,10 @@ var snore_cd := 0.0
 var present_stack: Array = ["PresentB", "PresentA", "PresentC", "PresentA", "PresentB", "PresentC"]
 var presents_placed := 0
 var stockings_filled := 0
+var presents_placed_here := 0  ## this house only (house_jobs.gd checklist)
+var stockings_filled_here := 0
+var jobs: Node  ## per-house objectives: snacks, Santa's boot prints, checklist (house_jobs.gd)
+var noise_bus: Callable  ## resident_events.gd: (pos, radius m, what) -> residents' restlessness
 var ledger_result := ""
 var evidence_log: Array = []  ## one Dictionary per house exited with evidence left behind
 var exit_warned_until := 0.0
@@ -147,9 +152,25 @@ func _ready() -> void:
 	rope = RopeTech.new()
 	rope.name = "RopeTech"
 	add_child(rope)
+	jobs = HouseJobs.new()
+	jobs.name = "HouseJobs"
+	add_child(jobs)
+	jobs.connect("noise", make_noise)
+
+
+## Any noise the elf makes (crunching, a snapped pick, a knocked bauble...): residents hear it
+## through walls and doors (resident_events.gd) and get restless.
+func make_noise(pos: Vector3, radius: float, what: String) -> void:
+	if noise_bus.is_valid():
+		noise_bus.call(pos, radius, what)
+	_creak_t = maxf(_creak_t, 0.5)
+	_creak_radius = maxf(_creak_radius if _creak_t > 0.0 else 0.0, radius)
 
 
 func night_factor() -> float:
+	var clock := get_tree().get_first_node_in_group("night_clock") if is_inside_tree() else null
+	if clock and float(clock.get("night_seconds")) > 0.0:
+		return sleep_depth_curve.sample(clampf(float(clock.get("k")), 0.0, 1.0))
 	return sleep_depth_curve.sample(clampf(night_time / night_length, 0.0, 1.0))
 
 
@@ -320,6 +341,15 @@ func begin(h: Node3D, e: CharacterBody3D) -> void:
 	set_mode("elf")
 	_refresh_hotbar()
 	rope.call("begin", h, e, self)
+	presents_placed_here = 0
+	stockings_filled_here = 0
+	for sp in interior.get("present_spots"):
+		if bool(sp.get("ours", false)):
+			presents_placed_here += 1
+	for s in interior.get("stockings"):
+		if bool(s.get_meta("filled", false)):
+			stockings_filled_here += 1
+	jobs.call("begin", h, e, self)
 
 
 ## What would count as evidence if you left now.
@@ -352,7 +382,10 @@ func end() -> Dictionary:
 	var ev := {"house": str(house.name), "darts_left_behind": darts_in_house.size(), "problems": problems,
 			"fire_out": bool(interior.get("fire_was_lit")) and not bool(house.get("fire_lit")),
 			"pipes_burst": problems.has("Burst pipe!") or problems.has("Cracked pipe (it'll burst)!"),
-			"presents": presents_placed, "stockings": stockings_filled, "ledger": ledger_result}
+			"presents": presents_placed, "stockings": stockings_filled, "ledger": ledger_result,
+			"complete": bool(jobs.call("is_complete")), "jobs": jobs.call("checklist_text")}
+	jobs.call("end")
+	print("[jobs] %s: %s" % [ev.house, "COMPLETE" if ev.complete else "unfinished"])
 	if not problems.is_empty():
 		evidence_log.append(ev)
 		var lines := []
@@ -422,7 +455,7 @@ func _process(delta: float) -> void:
 		else:
 			var sn := snack_in_reach()
 			if sn:
-				look_at_snack(sn)
+				eat_by_hand(sn)
 				door_used = true
 	if Input.is_action_just_pressed("gadget_next") and not door_used:
 		select((slot + 1) % SLOTS.size())
@@ -431,6 +464,13 @@ func _process(delta: float) -> void:
 	var ctl := bool(elf.get("control_enabled"))
 	var use_pressed := ctl and Input.is_action_just_pressed("gadget_use")
 	var use_held := ctl and Input.is_action_pressed("gadget_use")
+	if Input.is_action_just_pressed("soot_boots") and ctl:
+		jobs.call("toggle_boots")
+	if Input.is_action_pressed("snack_vac") and ctl and not bool(jobs.call("busy")):
+		var sv := snack_in_reach(true)
+		if sv:
+			jobs.call("start_eat", sv, "vac")
+	jobs.call("tick", delta)
 	rope.call("tick", delta)
 	_tick(delta, use_pressed, use_held or _icer_held)
 	_update_meter()
@@ -523,8 +563,8 @@ func _tick(delta: float, use_pressed: bool, use_held: bool) -> void:
 		info.text = "%s AWAKE!  Dart them or get out of sight.\n" % ", ".join(awake)
 	else:
 		info.text = ""
-	info.text += "Darts %d/%d   (%d in this house)\nPresents placed %d   Stockings %d\nNight %d%%   N: Glow-Gogs %s" % [darts_left, darts_per_run, darts_in_house.size(), presents_placed, stockings_filled,
-			int(100.0 * night_time / night_length), "ON" if goggles else "off"]
+	info.text += "Darts %d/%d   (%d in this house)\nN: Glow-Gogs %s   J: Soot Boots   K: Snack-Vac\n\n%s" % [darts_left, darts_per_run, darts_in_house.size(),
+			"ON" if goggles else "off", jobs.call("checklist_text")]
 	if snore_cd > 0.0 or slot == 1:
 		_refresh_hotbar()
 
@@ -547,11 +587,11 @@ func door_in_reach() -> Node3D:
 
 
 ## Santa's snacks (cookies and milk, beer and a carrot) within reach: E just comments, no rule effect.
-func snack_in_reach() -> Node3D:
+func snack_in_reach(device := false) -> Node3D:
 	if interior == null or elf == null:
 		return null
 	var best: Node3D = null
-	var bd := ES.m(snack_reach_eh)
+	var bd := ES.m(snack_reach_eh) * (2.2 if device else 1.0)  # the Snack-Vac's hose reaches up from the floor
 	for c in interior.get_children():
 		if c is MeshInstance3D and str(c.get_meta("piece", "")) in ["CookiesMilk", "BeerCarrot"]:
 			var d := (c as Node3D).global_position.distance_to(elf.global_position)
@@ -559,6 +599,18 @@ func snack_in_reach() -> Node3D:
 				bd = d
 				best = c
 	return best
+
+
+## By hand the elf has to be UP at the snacks (on the coffee table / hearth), not under them: a
+## 0.22 m elf can't reach a plate 0.45 m up. From the floor use the Snack-Vac (hold K).
+func eat_by_hand(sn: Node3D) -> bool:
+	if sn.global_position.y - elf.global_position.y > ES.m(0.6):
+		flash("Too high to reach: climb up there, or hold K for the Snack-Vac", Color(1.0, 0.85, 0.6), 2.0)
+		return false
+	if not bool(jobs.call("start_eat", sn, "hand")):
+		look_at_snack(sn)
+		return false
+	return true
 
 
 func look_at_snack(sn: Node3D) -> void:
@@ -1096,6 +1148,7 @@ func place_present() -> void:
 		for r in interior.get("residents"):
 			if int(r.state) == Resident.State.ASLEEP:
 				r.awareness += bauble_noise
+		make_noise(w, ES.m(20.0), "bauble smash")
 		flash("CRASH! A bauble hit the floor. Wrong spot.", Color(1, 0.4, 0.3))
 		return
 	var piece: String = present_stack.pop_front()
@@ -1103,6 +1156,8 @@ func place_present() -> void:
 	mi.layers = 2
 	sp.taken = true
 	presents_placed += 1
+	presents_placed_here += 1
+	sp["ours"] = true
 	var g := FX.glitter()
 	interior.add_child(g)
 	g.global_position = w + Vector3(0, 0.25, 0)
@@ -1152,6 +1207,7 @@ func puff_stocking(s: Node3D) -> void:
 func fill_stocking(s: Node3D) -> void:
 	s.set_meta("filled", true)
 	stockings_filled += 1
+	stockings_filled_here += 1
 	var cane := GB.cylinder(s, 0.012, 0.012, 0.22, Vector3(0.02, 0.06, 0), Color(0.95, 0.1, 0.1), Vector3(0, 0, 12))
 	cane.layers = 2
 	var toy := GB.box(s, Vector3(0.09, 0.09, 0.09), Vector3(-0.04, 0.02, 0.02), Color(0.3, 0.6, 1.0), Vector3(10, 20, 0))
